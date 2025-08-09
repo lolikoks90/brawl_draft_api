@@ -1,0 +1,52 @@
+{
+  "mode_weights": {
+    "Hot Zone": {
+      "control": 1.0,
+      "poke": 0.4,
+      "burst": 0.2,
+      "wall": 0.6
+    },
+    "Heist": {
+      "burst": 1.0,
+      "tank": 0.6,
+      "mobility": 0.4
+    },
+    "Brawl Ball": {
+      "cc": 0.8,
+      "burst": 0.7,
+      "mobility": 0.8,
+      "tank": 0.4
+    },
+    "Bounty": {
+      "range": 1.0,
+      "poke": 0.7,
+      "mobility": 0.4
+    },
+    "Gem Grab": {
+      "control": 0.8,
+      "poke": 0.5,
+      "mobility": 0.4
+    },
+    "Knockout": {
+      "range": 0.9,
+      "burst": 0.7,
+      "mobility": 0.5
+    },
+    "Wipeout": {
+      "burst": 0.8,
+      "mobility": 0.6
+    }
+  },
+  "redundancy_penalty": {
+    "thrower": 0.35,
+    "tank": 0.35,
+    "assassin": 0.3,
+    "sniper": 0.25,
+    "healer": 0.25
+  },
+  "ally_synergy_bonus": 0.25,
+  "pick_order": {
+    "first_pick_safety": 0.5,
+    "counter_risk_penalty": 0.6
+  }
+}

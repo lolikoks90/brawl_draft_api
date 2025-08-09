@@ -1,0 +1,63 @@
+{
+  "hard_counters": {
+    "Mortis": [
+      "Barley",
+      "Dynamike",
+      "Piper",
+      "Tick"
+    ],
+    "Shelly": [
+      "Bull",
+      "El Primo",
+      "Edgar",
+      "Fang",
+      "Bibi"
+    ],
+    "Piper": [
+      "Barley",
+      "Dynamike",
+      "Tick"
+    ],
+    "Frank": [
+      "Bibi",
+      "Bull"
+    ],
+    "Max": [
+      "Piper"
+    ],
+    "Griff": [
+      "tanks"
+    ],
+    "Spike": [
+      "tanks"
+    ],
+    "Belle": [
+      "long_range_low_hp"
+    ]
+  },
+  "synergy_pairs": {
+    "Pam": [
+      "Poco",
+      "8-BIT",
+      "Max"
+    ],
+    "Sandy": [
+      "Gene",
+      "Tara"
+    ],
+    "Gene": [
+      "Sandy",
+      "Max",
+      "8-BIT"
+    ],
+    "Bo": [
+      "Throwers"
+    ],
+    "Gale": [
+      "tanks"
+    ],
+    "Buster": [
+      "healer"
+    ]
+  }
+}

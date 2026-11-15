@@ -207,6 +207,13 @@ class Bot:
                 self.navigator.step(screen, now)
 
         if self.debug:
+            if not getattr(self, "_win_placed", False):
+                # Ventana de depuración a la derecha del emulador, para que no lo tape.
+                r = self.capture.region
+                cv2.namedWindow("crbot debug", cv2.WINDOW_NORMAL)
+                cv2.resizeWindow("crbot debug", max(200, r["width"] // 2), max(300, r["height"] // 2))
+                cv2.moveWindow("crbot debug", r["left"] + r["width"] + 10, r["top"])
+                self._win_placed = True
             extra = f"[{screen.value}]"
             if self.in_match:
                 extra += f" t={self.ctx.elapsed:.0f}s x{self.ctx.multiplier:.0f} rival~{self.ctx.opp_elixir:.1f}"
@@ -258,10 +265,14 @@ def _find_button(frame, hsv_range, y_from: float, y_to: float):
     return roi, [round((x + bw / 2) / w, 3), round((y + bh / 2) / h, 3)]
 
 
-def calibrate(cfg: dict, expect: Optional[str] = None) -> bool:
+def calibrate(cfg: dict, expect: Optional[str] = None, delay: float = 0) -> bool:
     from config import save_settings
 
     cap = ScreenCapture(cfg)
+    if delay:
+        print(f"Poniendo el emulador delante y capturando en {delay:.0f} segundos...", flush=True)
+        cap.focus()
+        time.sleep(delay)
     frame = cap.grab()
     ok = True
 
@@ -354,6 +365,7 @@ def main() -> int:
     p.add_argument("--epochs", type=int, default=100)
     p.add_argument("--ingest-videos", metavar="CARPETA", help="extrae jugadas de vídeos (fase 3)")
     p.add_argument("--train-policy", action="store_true", help="entrena la política de imitación y la red de valor")
+    p.add_argument("--delay", type=float, default=0, help="segundos de espera antes de capturar")
     p.add_argument("--expect", choices=["menu", "battle", "end"], help="pantalla que se calibra")
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args()
@@ -375,12 +387,13 @@ def main() -> int:
         ok_v = train_value(CONFIG, BASE_DIR)
         return 0 if (ok_p or ok_v) else 1
     if args.calibrate:
-        return 0 if calibrate(CONFIG, args.expect) else 1
+        return 0 if calibrate(CONFIG, args.expect, args.delay) else 1
 
     import pyautogui
     bot = Bot(CONFIG, debug=args.debug, collect=args.collect, play=not args.no_play,
               max_games=args.max_games)
-    time.sleep(2)
+    bot.capture.focus()
+    time.sleep(1)
     try:
         bot.run()
     except (KeyboardInterrupt, pyautogui.FailSafeException):

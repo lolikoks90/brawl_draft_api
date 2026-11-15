@@ -29,6 +29,7 @@ class ScreenCapture:
         self.cfg = cfg
         self.sct = mss.mss()
         self.found = False
+        self.window = None
         self.region = self._locate()
         log.info("Área de juego: %s", self.region)
 
@@ -45,6 +46,7 @@ class ScreenCapture:
                 except Exception:
                     pass
                 self.found = True
+                self.window = w
                 return {"left": w.left + m["left"], "top": w.top + m["top"],
                         "width": w.width - m["left"] - m["right"],
                         "height": w.height - m["top"] - m["bottom"]}
@@ -52,6 +54,23 @@ class ScreenCapture:
         except Exception as exc:
             log.warning("pygetwindow no disponible (%s); usando fallback_region.", exc)
         return dict(self.cfg["fallback_region"])
+
+    def focus(self) -> None:
+        """Pone la ventana del emulador delante (la captura toma lo que se ve en pantalla)."""
+        if self.window is None:
+            return
+        try:
+            if self.window.isMinimized:
+                self.window.restore()
+            self.window.activate()
+        except Exception:
+            try:   # truco habitual cuando Windows no deja activar la ventana directamente
+                self.window.minimize()
+                self.window.restore()
+            except Exception as exc:
+                log.warning("No he podido poner el emulador delante: %s", exc)
+        time.sleep(0.8)
+        self.region = self._locate()
 
     def grab(self) -> np.ndarray:
         raw = np.asarray(self.sct.grab(self.region))

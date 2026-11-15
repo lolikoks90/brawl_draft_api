@@ -240,8 +240,14 @@ class App:
         ttk.Button(f, text="Ver última imagen de calibración", command=self.show_calibration).pack(anchor="w", pady=6)
 
     def calibrate(self, expect: str) -> None:
-        self.runner.start(["--calibrate", "--expect", expect], f"Calibrar ({expect})",
-                          on_done=lambda code: self.show_calibration())
+        self.root.iconify()   # se aparta para que se vea el emulador
+
+        def done(code):
+            self.root.deiconify()
+            self.show_calibration()
+
+        self.runner.start(["--calibrate", "--expect", expect, "--delay", "3"], f"Calibrar ({expect})",
+                          on_done=done)
 
     def show_calibration(self) -> None:
         img_path = BASE / "calibration.png"
@@ -281,8 +287,10 @@ class App:
         args = ["--max-games", str(int(self.games.get() or 0))]
         if self.show_view.get():
             args.append("--debug")
-        self.log("El bot empieza en 2 segundos: pon el emulador delante.\n")
-        self.runner.start(args, "Jugar")
+        self.log("El programa se minimiza y el bot pone el emulador delante. Para parar: ratón a una "
+                 "esquina de la pantalla, o vuelve a abrir esta ventana y pulsa 'Detener'.\n")
+        self.root.iconify()
+        self.runner.start(args, "Jugar", on_done=lambda code: self.root.deiconify())
 
     # ---- 4. Mejorar -----------------------------------------------------------
     def _tab_train(self, nb) -> None:
@@ -291,7 +299,7 @@ class App:
         a = ttk.LabelFrame(f, text="Reconocer tropas (Roboflow)", padding=6)
         a.pack(fill="x", pady=4)
         steps = [
-            ("1) Empezar a guardar imágenes (juega tú mientras tanto)",
+            ("1) Empezar a guardar imágenes (juega tú mientras tanto; luego 'Detener')",
              lambda: self.runner.start(["--collect", "--no-play"], "Guardar imágenes")),
             ("2) Crear ZIP de imágenes para subir a Roboflow", self.make_zip),
             ("3) Abrir Roboflow (crea proyecto 'Object Detection', sube el ZIP y etiqueta)",

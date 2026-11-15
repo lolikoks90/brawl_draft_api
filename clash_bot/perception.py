@@ -203,6 +203,7 @@ class HandCard:
     name: Optional[str] = None
     cost: Optional[int] = None
     role: Optional[str] = None
+    thumb: Optional[np.ndarray] = None   # imagen de la carta (para que el usuario la identifique)
 
 
 @dataclass
@@ -356,7 +357,7 @@ class Perception:
                 continue
             sat = cv2.cvtColor(core, cv2.COLOR_BGR2HSV)[..., 1].mean()
             hand.append(HandCard(slot=i, hash=dhash(core),
-                                 available=bool(sat > self.cfg["card_gray_saturation"])))
+                                 available=bool(sat > self.cfg["card_gray_saturation"]), thumb=img))
         return hand
 
     # ---- Tropas ---------------------------------------------------------------
@@ -450,23 +451,34 @@ class Perception:
 # MEMORIA DE CARTAS
 # =============================================================================
 
+IGNORE = "__ignorar__"
+
+
 class CardMemory:
-    """Asocia hashes visuales a cartas del mazo midiendo su coste al jugarlas."""
+    """Asocia el aspecto de cada carta (hash visual) con una carta del mazo.
+
+    Cada carta nueva se guarda con su imagen en cartas/; el usuario dice cuál es en el
+    lanzador (pestaña "Cartas"). Sólo se deduce sola si su coste es único en el mazo.
+    """
+
+    STABLE_FRAMES = 6    # una carta nueva debe verse igual varios frames (evita animaciones)
 
     def __init__(self, path: Path, deck: dict, max_dist: int):
         self.path = path
+        self.img_dir = path.parent / "cartas"
         self.deck = deck
         self.max_dist = max_dist
         self.entries: list[dict] = []
+        self._pending: dict[int, tuple[int, int]] = {}
         if path.exists():
             try:
-                self.entries = json.loads(path.read_text())
-                log.info("Cargadas %d cartas aprendidas de %s", len(self.entries), path)
+                self.entries = json.loads(path.read_text(encoding="utf-8"))
+                log.info("Cargadas %d cartas de %s", len(self.entries), path)
             except Exception:
                 log.warning("cards_db corrupto; empezando de cero.")
 
     def save(self) -> None:
-        self.path.write_text(json.dumps(self.entries, indent=2, ensure_ascii=False))
+        self.path.write_text(json.dumps(self.entries, indent=2, ensure_ascii=False), encoding="utf-8")
 
     def find(self, h: int) -> Optional[dict]:
         best, best_d = None, self.max_dist + 1
@@ -476,10 +488,22 @@ class CardMemory:
                 best, best_d = e, d
         return best
 
+    def unknown_count(self) -> int:
+        return sum(1 for e in self.entries if not e.get("name"))
+
     def enrich(self, card: HandCard) -> None:
         e = self.find(card.hash)
         if e is None:
+            prev = self._pending.get(card.slot)
+            n = prev[1] + 1 if prev and hamming(prev[0], card.hash) <= self.max_dist else 1
+            self._pending[card.slot] = (card.hash, n)
+            if n < self.STABLE_FRAMES:
+                return
             e = {"hash": card.hash, "name": None, "cost_samples": []}
+            if card.thumb is not None:
+                self.img_dir.mkdir(exist_ok=True)
+                e["img"] = f"{card.hash:016x}.png"
+                cv2.imwrite(str(self.img_dir / e["img"]), card.thumb)
             self.entries.append(e)
             log.info("Nueva carta vista en slot %d (hash %016x)", card.slot + 1, card.hash)
             self.save()
@@ -493,11 +517,9 @@ class CardMemory:
             return
         e["cost_samples"].append(round(measured_drop, 2))
         cost = int(round(float(np.median(e["cost_samples"]))))
+        same_cost = [n for n, (c, _) in self.deck.items() if c == cost]
         taken = {x["name"] for x in self.entries if x["name"]}
-        candidates = [n for n, (c, _) in self.deck.items() if c == cost and n not in taken]
-        if not candidates:
-            candidates = [n for n, (c, _) in self.deck.items() if abs(c - cost) == 1 and n not in taken]
-        if candidates and (len(e["cost_samples"]) >= 2 or len(candidates) == 1):
-            e["name"] = candidates[0]
-            log.info("Carta aprendida: %016x -> %s", h, e["name"])
+        if len(same_cost) == 1 and same_cost[0] not in taken and len(e["cost_samples"]) >= 2:
+            e["name"] = same_cost[0]
+            log.info("Carta deducida por su coste: %016x -> %s", h, e["name"])
         self.save()

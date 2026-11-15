@@ -110,6 +110,7 @@ class App:
         nb.pack(fill="both", expand=False, padx=8, pady=6)
         self._tab_config(nb)
         self._tab_calibrate(nb)
+        self._tab_cards(nb)
         self._tab_play(nb)
         self._tab_train(nb)
 
@@ -127,7 +128,7 @@ class App:
         sb.pack(side="right", fill="y")
         self.text.pack(fill="both", expand=True)
         self.runner.poll()
-        self.log("Bienvenido. Sigue las pestañas en orden: 1 → 2 → 3. La 4 es opcional (mejorar el bot).\n")
+        self.log("Bienvenido. Sigue las pestañas en orden: 1 → 2 → 3 → 4. La 5 es opcional (mejorar el bot).\n")
 
     # ---- utilidades -----------------------------------------------------------
     def log(self, msg: str) -> None:
@@ -266,10 +267,85 @@ class App:
         ttk.Label(top, text="Morado = barra de elixir · Amarillo = cartas · Verde = arena · Rojo/azul = torres · "
                             "Naranja = botones Batalla/OK", wraplength=500).pack(pady=4)
 
-    # ---- 3. Jugar -------------------------------------------------------------
+    # ---- 3. Cartas ------------------------------------------------------------
+    def _tab_cards(self, nb) -> None:
+        f = ttk.Frame(nb, padding=10)
+        nb.add(f, text="3. Cartas")
+        self._help(f, "El bot necesita saber cuál es cada carta. Paso 1: entra en una batalla de entrenamiento, "
+                      "pulsa el botón de abajo y JUEGA TÚ la partida usando todas tus cartas (el bot sólo mira). "
+                      "Paso 2: cuando termine, pulsa 'Mostrar cartas vistas', elige el nombre de cada imagen y guarda. "
+                      "Si una imagen no es una carta o está repetida/borrosa, elige '(ignorar)'.")
+        ttk.Button(f, text="Paso 1) Mirar mis cartas mientras juego yo una partida",
+                   command=self.watch_cards).pack(fill="x", pady=2)
+        ttk.Button(f, text="Paso 2) Mostrar cartas vistas", command=self.show_cards).pack(fill="x", pady=2)
+        self.cards_frame = ttk.Frame(f)
+        self.cards_frame.pack(fill="x", pady=6)
+        self.card_rows = []
+        ttk.Button(f, text="💾 Guardar cartas", command=self.save_cards).pack(anchor="e")
+
+    def watch_cards(self) -> None:
+        self.log("Juega tú la partida. Al terminar, el programa vuelve a aparecer.\n")
+        self.root.iconify()
+        self.runner.start(["--no-play", "--max-games", "1"], "Mirar cartas",
+                          on_done=lambda code: (self.root.deiconify(), self.show_cards()))
+
+    def _cards_db(self) -> Path:
+        return BASE / config.CONFIG["cards_db"]
+
+    def show_cards(self) -> None:
+        import json
+        for w in self.cards_frame.winfo_children():
+            w.destroy()
+        self.card_rows = []
+        try:
+            self.card_entries = json.loads(self._cards_db().read_text(encoding="utf-8"))
+        except Exception:
+            self.card_entries = []
+        deck = list(config.load_settings().get("deck", {}).keys()) or list(config.DECK.keys())
+        options = ["(sin identificar)", *deck, "(ignorar)"]
+        shown = 0
+        for e in self.card_entries:
+            img_path = BASE / "cartas" / str(e.get("img", ""))
+            if not e.get("img") or not img_path.exists():
+                continue
+            cell = ttk.Frame(self.cards_frame)
+            cell.grid(row=shown // 6, column=shown % 6, padx=4, pady=4)
+            try:
+                img = tk.PhotoImage(file=str(img_path))
+                if img.height() > 110:
+                    img = img.subsample(2) if img.height() > 220 else img
+                lbl = ttk.Label(cell, image=img)
+                lbl.image = img
+                lbl.pack()
+            except tk.TclError:
+                ttk.Label(cell, text="(imagen)").pack()
+            cb = ttk.Combobox(cell, width=18, state="readonly", values=options)
+            name = e.get("name")
+            cb.set("(ignorar)" if name == "__ignorar__" else (name if name in deck else "(sin identificar)"))
+            cb.pack()
+            self.card_rows.append((e, cb))
+            shown += 1
+        if not shown:
+            ttk.Label(self.cards_frame, text="Aún no he visto ninguna carta. Haz primero el paso 1.").grid()
+
+    def save_cards(self) -> None:
+        import json
+        if not self.card_rows:
+            return
+        for e, cb in self.card_rows:
+            v = cb.get()
+            e["name"] = None if v == "(sin identificar)" else ("__ignorar__" if v == "(ignorar)" else v)
+        self._cards_db().write_text(json.dumps(self.card_entries, indent=2, ensure_ascii=False), encoding="utf-8")
+        names = {e["name"] for e in self.card_entries if e.get("name") and e["name"] != "__ignorar__"}
+        deck = list(config.load_settings().get("deck", {}).keys()) or list(config.DECK.keys())
+        missing = [n for n in deck if n not in names]
+        self.log(f"✔ Cartas guardadas. Identificadas: {len(names)} de {len(deck)}."
+                 + (f" Faltan: {', '.join(missing)}\n" if missing else " ¡Todas!\n"))
+
+    # ---- 4. Jugar -------------------------------------------------------------
     def _tab_play(self, nb) -> None:
         f = ttk.Frame(nb, padding=10)
-        nb.add(f, text="3. Jugar")
+        nb.add(f, text="4. Jugar")
         self._help(f, "Deja el emulador visible y no toques el ratón mientras juega. Para pararlo: botón 'Detener' "
                       "o lleva el ratón a una esquina de la pantalla. Recomendado: usa una cuenta secundaria.")
         row = ttk.Frame(f)
@@ -295,7 +371,7 @@ class App:
     # ---- 4. Mejorar -----------------------------------------------------------
     def _tab_train(self, nb) -> None:
         f = ttk.Frame(nb, padding=10)
-        nb.add(f, text="4. Mejorar el bot (opcional)")
+        nb.add(f, text="5. Mejorar el bot (opcional)")
         a = ttk.LabelFrame(f, text="Reconocer tropas (Roboflow)", padding=6)
         a.pack(fill="x", pady=4)
         steps = [

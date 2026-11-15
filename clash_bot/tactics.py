@@ -64,7 +64,6 @@ class TacticalEngine:
             self.rule_follow_tank,
             self.rule_tank_push,
             self.rule_prevent_leak,
-            self.rule_explore_unknown,
         ]
 
     # ---- utilidades -----------------------------------------------------------
@@ -87,9 +86,6 @@ class TacticalEngine:
                 if c.role == role and c.slot not in used:
                     out.append((rank, c))
                     used.add(c.slot)
-        if not out and allow_unknown:
-            # Arranque en frío: cartas aún sin identificar sirven antes que no hacer nada.
-            out = [(len(roles), c) for c in cards if c.role is None]
         return out[:limit]
 
     def lane_col(self, lane: str, back: bool = False) -> int:
@@ -103,10 +99,22 @@ class TacticalEngine:
         if role and role.startswith("spell"):
             return col, row
         lane = "left" if col < self.cols / 2 else "right"
-        min_row = self.cfg["river_rows"][1] + 1
+        min_row = self.cfg["river_rows"][1] + 2      # una fila de margen respecto al río
         if lane in ctx.enemy_towers_down:   # con su torre caída se puede desplegar en su lado
             min_row = 10
-        return col, max(row, min_row)
+        row = min(max(row, min_row), self.rows - 2)  # ni en el río ni en el borde del fondo
+        # No se puede desplegar encima de nuestras torres: mover a la casilla libre más cercana.
+        towers = self.cfg["towers"]
+        for name in ("own_left", "own_right"):
+            if name.split("_")[1] in ctx.own_towers_down:
+                continue
+            c1, r1, c2, r2 = towers[name]
+            if c1 <= col < c2 and r1 <= row < r2:
+                row = r1 - 1 if row < (r1 + r2) / 2 else r2
+        c1, r1, c2, r2 = towers["own_king"]
+        if c1 <= col < c2 and r1 <= row:
+            col = c1 - 1 if col < (c1 + c2) / 2 else c2
+        return col, row
 
     def situation(self, s: GameState) -> Situation:
         if not s.threats_own_half:
@@ -272,7 +280,7 @@ class TacticalEngine:
         lane = sorted(down)[0] if down else random.choice(["left", "right"])
         out = []
         for _, c in self.cards_for(s, ["tank"], limit=1):
-            out.append(self._mk(c, (self.cols // 2 + (-1 if lane == "left" else 0), self.rows - 1), ctx,
+            out.append(self._mk(c, (5 if lane == "left" else self.cols - 6, self.rows - 3), ctx,
                                 "tank_push", "back", 0.55, f"tanque atrás ({lane}) con {c.name}"))
             if ctx.multiplier >= 2:
                 out.append(self._mk(c, (self.lane_col(lane), 17), ctx, "tank_push", "bridge", 0.5,
@@ -282,7 +290,7 @@ class TacticalEngine:
     def rule_prevent_leak(self, s: GameState, ctx: BattleContext, sit: Situation) -> list[Action]:
         if s.elixir < self.t["leak_elixir"] or sit.kind != "idle":
             return []
-        cards = [c for c in self.playable(s) if not (c.role or "").startswith("spell") and c.role != "siege"]
+        cards = [c for c in self.playable(s) if c.role and not c.role.startswith("spell") and c.role != "siege"]
         if not cards:
             return []
         c = min(cards, key=lambda c: c.cost or 5)

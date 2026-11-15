@@ -94,6 +94,9 @@ class Bot:
         self.clear_since: Optional[float] = None
         self.games_since_retrain = 0
         self.ctx = BattleContext(now=time.time())
+        self.last_screen = Screen.UNKNOWN
+        self.match_ended_at = 0.0
+        self._warned_cards = False
 
     # ---- ciclo de partida -----------------------------------------------------
     def _start_match(self, state: GameState, now: float) -> None:
@@ -112,6 +115,10 @@ class Bot:
 
     def _end_match(self, now: float) -> None:
         self.in_match = False
+        self.match_ended_at = now
+        if self.memory.unknown_count():
+            log.warning("Hay %d cartas sin identificar: abre la pestaña 'Cartas' del lanzador y di cuál es "
+                        "cada una. El bot NO juega las cartas que no conoce.", self.memory.unknown_count())
         result = self.match.result()
         self.stats.record(result, self.match.crowns(), self.match.elapsed(now), self.plays)
         self.learner.end_game(result)
@@ -193,6 +200,7 @@ class Bot:
         frame = self.capture.grab()
         state = self.perception.analyse(frame)
         screen = self.screens.classify(frame, state)
+        self.last_screen = screen
 
         if screen == Screen.BATTLE:
             self.no_bar_since = None
@@ -234,8 +242,11 @@ class Bot:
             t0 = time.perf_counter()
             self.step()
             if not self.in_match and self.navigator.finished():
-                log.info("Límite de partidas alcanzado.")
-                return
+                # Antes de salir hay que pulsar OK y volver al menú (máx. 40 s).
+                back = self.last_screen == Screen.MENU or time.time() - self.match_ended_at > 40
+                if not self.play or back:
+                    log.info("Límite de partidas alcanzado.")
+                    return
             time.sleep(max(0.0, period - (time.perf_counter() - t0)))
 
 

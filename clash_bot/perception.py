@@ -1,0 +1,405 @@
+"""Visión: captura de pantalla, lectura de elixir/cartas y detección de tropas."""
+
+from __future__ import annotations
+
+import json
+import logging
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+
+import cv2
+import numpy as np
+
+from config import TEAM_PREFIXES, TROOP_PROFILES
+
+log = logging.getLogger("crbot")
+
+
+# =============================================================================
+# CAPTURA
+# =============================================================================
+
+class ScreenCapture:
+    """Captura el área de juego del emulador con mss."""
+
+    def __init__(self, cfg: dict):
+        import mss
+        self.cfg = cfg
+        self.sct = mss.mss()
+        self.region = self._locate()
+        log.info("Área de juego: %s", self.region)
+
+    def _locate(self) -> dict:
+        m = self.cfg["window_margins"]
+        try:
+            import pygetwindow as gw
+            wins = [w for w in gw.getWindowsWithTitle(self.cfg["window_title"]) if w.width > 100]
+            if wins:
+                w = wins[0]
+                try:
+                    if w.isMinimized:
+                        w.restore()
+                except Exception:
+                    pass
+                return {"left": w.left + m["left"], "top": w.top + m["top"],
+                        "width": w.width - m["left"] - m["right"],
+                        "height": w.height - m["top"] - m["bottom"]}
+            log.warning("Ventana '%s' no encontrada; usando fallback_region.", self.cfg["window_title"])
+        except Exception as exc:
+            log.warning("pygetwindow no disponible (%s); usando fallback_region.", exc)
+        return dict(self.cfg["fallback_region"])
+
+    def grab(self) -> np.ndarray:
+        raw = np.asarray(self.sct.grab(self.region))
+        return cv2.cvtColor(raw, cv2.COLOR_BGRA2BGR)
+
+    def to_screen(self, fx: float, fy: float) -> tuple[int, int]:
+        r = self.region
+        return int(r["left"] + fx * r["width"]), int(r["top"] + fy * r["height"])
+
+
+# =============================================================================
+# UTILIDADES
+# =============================================================================
+
+def crop(frame: np.ndarray, roi: tuple[float, float, float, float]) -> np.ndarray:
+    h, w = frame.shape[:2]
+    x1, y1, x2, y2 = roi
+    return frame[int(y1 * h):int(y2 * h), int(x1 * w):int(x2 * w)]
+
+
+def dhash(img: np.ndarray, size: int = 8) -> int:
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    small = cv2.resize(gray, (size + 1, size), interpolation=cv2.INTER_AREA)
+    bits = (small[:, 1:] > small[:, :-1]).flatten()
+    return int(sum(1 << i for i, b in enumerate(bits) if b))
+
+
+def hamming(a: int, b: int) -> int:
+    return bin(a ^ b).count("1")
+
+
+def normalize_label(name: str) -> tuple[str, Optional[str]]:
+    """'Enemy PEKKA' -> ('pekka', 'enemy'); 'mini-pekka' -> ('mini_pekka', None)."""
+    n = name.strip().lower().replace(" ", "_").replace("-", "_").replace(".", "")
+    for prefix, team in TEAM_PREFIXES.items():
+        if n.startswith(prefix):
+            return n[len(prefix):], team
+    return n, None
+
+
+def hsv_ranges(ranges) -> list[tuple[np.ndarray, np.ndarray]]:
+    return [(np.array(lo, np.uint8), np.array(hi, np.uint8)) for lo, hi in ranges]
+
+
+def mask_ranges(hsv: np.ndarray, ranges) -> np.ndarray:
+    m = np.zeros(hsv.shape[:2], np.uint8)
+    for lo, hi in ranges:
+        m |= cv2.inRange(hsv, lo, hi)
+    return m
+
+
+def tile_rect_px(rect, aw: int, ah: int, cols: int, rows: int, pad: int = 0):
+    c1, r1, c2, r2 = rect
+    return (max(0, int((c1 - pad) / cols * aw)), max(0, int((r1 - pad) / rows * ah)),
+            min(aw, int((c2 + pad) / cols * aw)), min(ah, int((r2 + pad) / rows * ah)))
+
+
+# =============================================================================
+# ESTADO
+# =============================================================================
+
+@dataclass
+class Unit:
+    tile: tuple[int, int]               # (columna, fila)
+    area: int
+    lane: str                           # "left" | "right"
+    label: Optional[str] = None         # clase YOLO normalizada; None = detección por color
+    kind: Optional[str] = None          # heavy | air | swarm | building | light | spell
+    conf: float = 1.0
+    bbox: Optional[tuple[int, int, int, int]] = None
+
+
+Threat = Unit  # alias por compatibilidad
+
+
+@dataclass
+class HandCard:
+    slot: int
+    hash: int
+    available: bool
+    name: Optional[str] = None
+    cost: Optional[int] = None
+    role: Optional[str] = None
+
+
+@dataclass
+class GameState:
+    timestamp: float
+    in_battle: bool
+    elixir: float
+    hand: list[HandCard] = field(default_factory=list)
+    threats_own_half: list[Unit] = field(default_factory=list)
+    threats_enemy_half: list[Unit] = field(default_factory=list)
+    enemy_spells: list[Unit] = field(default_factory=list)
+    allies: list[Unit] = field(default_factory=list)
+
+    @property
+    def enemies(self) -> list[Unit]:
+        return self.threats_own_half + self.threats_enemy_half
+
+
+# =============================================================================
+# YOLO
+# =============================================================================
+
+class YoloDetector:
+    """Detector de tropas YOLO; el bando sale del prefijo de clase o del color del indicador."""
+
+    def __init__(self, cfg: dict, base_dir: Path):
+        self.cfg = cfg
+        self.ycfg = cfg["yolo"]
+        self.ok = False
+        self.red = hsv_ranges(cfg["enemy_hsv_ranges"])
+        self.blue = hsv_ranges([cfg["ally_hsv"]])
+        if not self.ycfg["enabled"]:
+            return
+        path = base_dir / self.ycfg["model"]
+        if not path.exists():
+            log.warning("Modelo YOLO '%s' no encontrado: uso detección por color.", path)
+            return
+        try:
+            from ultralytics import YOLO
+        except ImportError:
+            log.warning("ultralytics no instalado: uso detección por color.")
+            return
+        self.model = YOLO(str(path))
+        self.names = {int(k): v for k, v in self.model.names.items()}
+        self.ok = True
+        log.info("YOLO cargado (%d clases) desde %s", len(self.names), path)
+
+    def _team_by_color(self, hsv: np.ndarray, box) -> str:
+        x1, y1, x2, y2 = box
+        h = max(1, y2 - y1)
+        roi = hsv[max(0, y1 - h // 3):y1 + h // 3, max(0, x1):max(x1 + 1, x2)]
+        if roi.size == 0:
+            return "enemy"
+        red = int(mask_ranges(roi, self.red).sum())
+        blue = int(mask_ranges(roi, self.blue).sum())
+        return "enemy" if red >= blue else "ally"
+
+    def detect(self, arena: np.ndarray):
+        """[(label, team, conf, (x1, y1, x2, y2)), ...] en px del recorte de la arena."""
+        res = self.model.predict(arena, conf=self.ycfg["conf"], iou=self.ycfg["iou"],
+                                 imgsz=self.ycfg["imgsz"], device=self.ycfg["device"],
+                                 verbose=False)[0]
+        hsv = None
+        out = []
+        for xyxy, cls, conf in zip(res.boxes.xyxy.tolist(), res.boxes.cls.tolist(),
+                                   res.boxes.conf.tolist()):
+            label, team = normalize_label(self.names[int(cls)])
+            box = tuple(int(v) for v in xyxy)
+            if team is None:
+                if hsv is None:
+                    hsv = cv2.cvtColor(arena, cv2.COLOR_BGR2HSV)
+                team = self._team_by_color(hsv, box)
+            out.append((label, team, float(conf), box))
+        return out
+
+
+# =============================================================================
+# PERCEPCIÓN
+# =============================================================================
+
+class Perception:
+    def __init__(self, cfg: dict, detector: Optional[YoloDetector] = None):
+        self.cfg = cfg
+        self.detector = detector if detector and detector.ok else None
+        self.e_low = np.array(cfg["elixir_hsv_low"], np.uint8)
+        self.e_high = np.array(cfg["elixir_hsv_high"], np.uint8)
+        self.red = hsv_ranges(cfg["enemy_hsv_ranges"])
+        self.blue = hsv_ranges([cfg["ally_hsv"]])
+        self.cols, self.rows = cfg["arena_tiles"]
+        self._frame_idx = 0
+        self._cache = ([], [], [])
+        self._static_mask: Optional[np.ndarray] = None
+
+    # ---- Elixir ---------------------------------------------------------------
+    def read_elixir(self, frame: np.ndarray) -> tuple[float, bool]:
+        bar = crop(frame, self.cfg["elixir_roi"])
+        if bar.size == 0:
+            return 0.0, False
+        hsv = cv2.cvtColor(bar, cv2.COLOR_BGR2HSV)
+        mask = cv2.inRange(hsv, self.e_low, self.e_high)
+        col_fill = (mask > 0).mean(axis=0) > 0.4
+        dark = bool((hsv[..., 2] < 70).mean() > 0.6)
+        if not col_fill.any():
+            return 0.0, dark
+        filled, gap = 0, 0
+        for v in col_fill:
+            if v:
+                filled += 1 + gap
+                gap = 0
+            else:
+                gap += 1
+                if gap > max(3, len(col_fill) // 60):
+                    break
+        # Exigir un tramo contiguo desde la izquierda: evita falsos positivos en menús.
+        visible = bool(col_fill[: max(2, len(col_fill) // 40)].any()) or dark
+        return round(10.0 * filled / len(col_fill), 1), visible
+
+    # ---- Cartas ---------------------------------------------------------------
+    def read_hand(self, frame: np.ndarray) -> list[HandCard]:
+        hand = []
+        for i, roi in enumerate(self.cfg["card_rois"]):
+            img = crop(frame, roi)
+            h, w = img.shape[:2]
+            core = img[int(h * 0.12):int(h * 0.80), int(w * 0.12):int(w * 0.88)]
+            if core.size == 0:
+                continue
+            sat = cv2.cvtColor(core, cv2.COLOR_BGR2HSV)[..., 1].mean()
+            hand.append(HandCard(slot=i, hash=dhash(core),
+                                 available=bool(sat > self.cfg["card_gray_saturation"])))
+        return hand
+
+    # ---- Tropas ---------------------------------------------------------------
+    def _to_tile(self, cx: float, cy: float, aw: int, ah: int) -> tuple[int, int]:
+        return (int(np.clip(cx / aw * self.cols, 0, self.cols - 1)),
+                int(np.clip(cy / ah * self.rows, 0, self.rows - 1)))
+
+    def _lane(self, col: int) -> str:
+        return "left" if col < self.cols / 2 else "right"
+
+    def _mask_static(self, ah: int, aw: int) -> np.ndarray:
+        """Máscara (255 = analizar) que excluye torres y río (colores fijos del escenario)."""
+        if self._static_mask is None or self._static_mask.shape != (ah, aw):
+            m = np.full((ah, aw), 255, np.uint8)
+            for rect in self.cfg["towers"].values():
+                x1, y1, x2, y2 = tile_rect_px(rect, aw, ah, self.cols, self.rows, pad=1)
+                m[y1:y2, x1:x2] = 0
+            r1, r2 = self.cfg["river_rows"]
+            m[int(r1 / self.rows * ah):int((r2 + 1) / self.rows * ah), :] = 0
+            self._static_mask = m
+        return self._static_mask
+
+    def read_units(self, frame: np.ndarray) -> tuple[list[Unit], list[Unit], list[Unit]]:
+        """(enemigos, aliados, hechizos_enemigos), cacheado cada N frames si hay YOLO."""
+        if self.detector is None:
+            return self._units_color(frame)
+        self._frame_idx += 1
+        if self._frame_idx % self.cfg["yolo"]["every_n_frames"] == 0 or self._frame_idx == 1:
+            self._cache = self._units_yolo(frame)
+        return self._cache
+
+    def _units_yolo(self, frame: np.ndarray):
+        arena = crop(frame, self.cfg["arena_roi"])
+        ah, aw = arena.shape[:2]
+        enemies, allies, spells = [], [], []
+        for label, team, conf, (x1, y1, x2, y2) in self.detector.detect(arena):
+            kind = TROOP_PROFILES.get(label, "light")
+            if kind == "ignore":
+                continue
+            cx, cy = (x1 + x2) / 2, y2 - (y2 - y1) * 0.15
+            tile = self._to_tile(cx, cy, aw, ah)
+            u = Unit(tile, (x2 - x1) * (y2 - y1), self._lane(tile[0]), label, kind, conf,
+                     (x1, y1, x2, y2))
+            if team == "ally":
+                allies.append(u)
+            elif kind == "spell":
+                spells.append(u)
+            else:
+                enemies.append(u)
+        return enemies, allies, spells
+
+    def _blobs(self, mask: np.ndarray, aw: int, ah: int) -> list[Unit]:
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+        n, _, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        out = []
+        for k in range(1, n):
+            area = int(stats[k, cv2.CC_STAT_AREA])
+            if area < self.cfg["threat_min_area"]:
+                continue
+            tile = self._to_tile(*centroids[k], aw, ah)
+            out.append(Unit(tile, area, self._lane(tile[0])))
+        return out
+
+    def _units_color(self, frame: np.ndarray):
+        arena = crop(frame, self.cfg["arena_roi"])
+        ah, aw = arena.shape[:2]
+        hsv = cv2.cvtColor(arena, cv2.COLOR_BGR2HSV)
+        static = self._mask_static(ah, aw)
+        enemies = self._blobs(mask_ranges(hsv, self.red) & static, aw, ah)
+        allies = self._blobs(mask_ranges(hsv, self.blue) & static, aw, ah)
+        return enemies, allies, []
+
+    # ---- Estado completo ------------------------------------------------------
+    def analyse(self, frame: np.ndarray) -> GameState:
+        elixir, visible = self.read_elixir(frame)
+        st = GameState(timestamp=time.time(), in_battle=visible, elixir=elixir)
+        if not visible:
+            return st
+        st.hand = self.read_hand(frame)
+        enemies, st.allies, st.enemy_spells = self.read_units(frame)
+        river_top = self.cfg["river_rows"][0]
+        for u in enemies:
+            (st.threats_own_half if u.tile[1] >= river_top else st.threats_enemy_half).append(u)
+        return st
+
+
+# =============================================================================
+# MEMORIA DE CARTAS
+# =============================================================================
+
+class CardMemory:
+    """Asocia hashes visuales a cartas del mazo midiendo su coste al jugarlas."""
+
+    def __init__(self, path: Path, deck: dict, max_dist: int):
+        self.path = path
+        self.deck = deck
+        self.max_dist = max_dist
+        self.entries: list[dict] = []
+        if path.exists():
+            try:
+                self.entries = json.loads(path.read_text())
+                log.info("Cargadas %d cartas aprendidas de %s", len(self.entries), path)
+            except Exception:
+                log.warning("cards_db corrupto; empezando de cero.")
+
+    def save(self) -> None:
+        self.path.write_text(json.dumps(self.entries, indent=2, ensure_ascii=False))
+
+    def find(self, h: int) -> Optional[dict]:
+        best, best_d = None, self.max_dist + 1
+        for e in self.entries:
+            d = hamming(h, e["hash"])
+            if d < best_d:
+                best, best_d = e, d
+        return best
+
+    def enrich(self, card: HandCard) -> None:
+        e = self.find(card.hash)
+        if e is None:
+            e = {"hash": card.hash, "name": None, "cost_samples": []}
+            self.entries.append(e)
+            log.info("Nueva carta vista en slot %d (hash %016x)", card.slot + 1, card.hash)
+            self.save()
+        if e["name"] and e["name"] in self.deck:
+            card.name = e["name"]
+            card.cost, card.role = self.deck[e["name"]]
+
+    def learn_cost(self, h: int, measured_drop: float) -> None:
+        e = self.find(h)
+        if e is None or e["name"]:
+            return
+        e["cost_samples"].append(round(measured_drop, 2))
+        cost = int(round(float(np.median(e["cost_samples"]))))
+        taken = {x["name"] for x in self.entries if x["name"]}
+        candidates = [n for n, (c, _) in self.deck.items() if c == cost and n not in taken]
+        if not candidates:
+            candidates = [n for n, (c, _) in self.deck.items() if abs(c - cost) == 1 and n not in taken]
+        if candidates and (len(e["cost_samples"]) >= 2 or len(candidates) == 1):
+            e["name"] = candidates[0]
+            log.info("Carta aprendida: %016x -> %s", h, e["name"])
+        self.save()

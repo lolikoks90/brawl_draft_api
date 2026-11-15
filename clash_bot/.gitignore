@@ -5,3 +5,7 @@ dataset/
 runs/
 *.pt
 __pycache__/
+learner_db.json
+match_history.jsonl
+policy_data/
+videos/

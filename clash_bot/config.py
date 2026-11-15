@@ -148,7 +148,8 @@ CONFIG = {
 }
 
 # Mazo: nombre -> (coste, rol). Roles:
-#   tank, tank_killer, splash, spell_small, spell_big, support, cycle, building
+#   tank, tank_killer, splash, spell_small, spell_big, support, cycle, building,
+#   siege (Mortero, Ballesta: edificio que ataca torres desde nuestro lado)
 DECK = {
     "Giant": (5, "tank"),
     "Mini P.E.K.K.A": (4, "tank_killer"),
@@ -160,12 +161,12 @@ DECK = {
     "Cannon": (3, "building"),
 }
 
-ROLES = ["tank", "tank_killer", "splash", "spell_small", "spell_big", "support", "cycle", "building"]
+ROLES = ["tank", "tank_killer", "splash", "spell_small", "spell_big", "support", "cycle", "building", "siege"]
 KINDS = ["heavy", "air", "swarm", "building", "light"]
 KIND_PRIORITY = ["heavy", "building", "air", "swarm", "light"]
 
 COUNTERS = {
-    "heavy": ["tank_killer", "building", "cycle", "support"],
+    "heavy": ["tank_killer", "building", "siege", "cycle", "support"],
     "swarm": ["spell_small", "splash", "spell_big", "support"],
     "light": ["splash", "support", "cycle", "tank_killer", "building"],
     "air": ["support", "spell_big", "building", "spell_small"],

@@ -59,6 +59,7 @@ class TacticalEngine:
             self.rule_defend,
             self.rule_spell_value,
             self.rule_punish,
+            self.rule_siege,
             self.rule_counter_push,
             self.rule_follow_tank,
             self.rule_tank_push,
@@ -203,7 +204,7 @@ class TacticalEngine:
             lane = random.choice(["left", "right"])
         col = self.lane_col(lane)
         out = []
-        for rank, c in self.cards_for(s, ["tank", "tank_killer", "support", "splash"]):
+        for rank, c in self.cards_for(s, ["siege", "tank", "tank_killer", "support", "splash"]):
             out.append(self._mk(c, (col, 17), ctx, "punish", "bridge", 0.8 - 0.08 * rank,
                                 f"castigo con {c.name} en puente {lane} (rival ~{ctx.opp_elixir:.1f})"))
         return out
@@ -225,15 +226,43 @@ class TacticalEngine:
         if sit.kind != "idle" or s.elixir < 3:
             return []
         lo, hi = self.t["follow_tank_window_s"]
-        tanks = [a for t, a in self.history if a.role == "tank" and lo <= ctx.now - t <= hi]
+        tanks = [a for t, a in self.history if a.role in ("tank", "siege") and lo <= ctx.now - t <= hi]
         if not tanks:
             return []
-        lane_col = tanks[-1].tile[0]
+        last = tanks[-1]
+        lane_col = last.tile[0]
+        row = min(self.rows - 1, last.tile[1] + 3) if last.role == "siege" else 25
+        what = "proteger el asedio" if last.role == "siege" else "apoyo al tanque"
         out = []
         for rank, c in self.cards_for(s, ["support", "splash", "tank_killer"], limit=2):
-            out.append(self._mk(c, (lane_col, 25), ctx, "follow_tank", "behind_tank", 0.7 - 0.08 * rank,
-                                f"apoyo al tanque con {c.name}"))
+            out.append(self._mk(c, (lane_col, row), ctx, "follow_tank", "behind_tank", 0.7 - 0.08 * rank,
+                                f"{what} con {c.name}"))
         return out
+
+    def rule_siege(self, s: GameState, ctx: BattleContext, sit: Situation) -> list[Action]:
+        """Mortero / Ballesta en el puente para atacar la torre, si no hay uno reciente."""
+        if sit.kind != "idle":
+            return []
+        if any(a.role == "siege" and ctx.now - t < 10 for t, a in self.history):
+            return []
+        cards = self.cards_for(s, ["siege"], limit=1)
+        if not cards:
+            return []
+        c = cards[0][1]
+        spare = 0 if ctx.multiplier >= 2 else 1   # un elixir de margen para defenderlo
+        if s.elixir < (c.cost or 4) + spare:
+            return []
+        down = ctx.enemy_towers_down & {"left", "right"}
+        big = [d for d in ctx.opp_recent if d.cost >= 5]
+        if down:
+            lane = sorted(down)[0]
+        elif big:
+            lane = "right" if big[-1].lane == "left" else "left"
+        else:
+            lane = random.choice(["left", "right"])
+        col = self.lane_col(lane)
+        return [self._mk(c, (col, 17), ctx, "siege", "bridge", 0.7, f"{c.name} en el puente ({lane})"),
+                self._mk(c, (col, 19), ctx, "siege", "safe", 0.6, f"{c.name} algo retrasado ({lane})")]
 
     def rule_tank_push(self, s: GameState, ctx: BattleContext, sit: Situation) -> list[Action]:
         need = self.t["tank_push_elixir_double"] if ctx.multiplier >= 2 else self.t["tank_push_elixir"]
@@ -253,7 +282,7 @@ class TacticalEngine:
     def rule_prevent_leak(self, s: GameState, ctx: BattleContext, sit: Situation) -> list[Action]:
         if s.elixir < self.t["leak_elixir"] or sit.kind != "idle":
             return []
-        cards = [c for c in self.playable(s) if not (c.role or "").startswith("spell")]
+        cards = [c for c in self.playable(s) if not (c.role or "").startswith("spell") and c.role != "siege"]
         if not cards:
             return []
         c = min(cards, key=lambda c: c.cost or 5)

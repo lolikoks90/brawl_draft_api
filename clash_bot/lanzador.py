@@ -30,6 +30,7 @@ ROLE_LABELS = {
     "support": "Apoyo a distancia (Mosquetera, Arqueras...)",
     "cycle": "Barata / ciclo (Esqueletos, Espíritu de hielo...)",
     "building": "Edificio (Cañón, Tesla, Torre bombardera...)",
+    "siege": "Asedio (Mortero, Ballesta)",
     "spell_small": "Hechizo pequeño (Descarga, Tronco, Flechas...)",
     "spell_big": "Hechizo grande (Bola de fuego, Veneno, Cohete...)",
 }

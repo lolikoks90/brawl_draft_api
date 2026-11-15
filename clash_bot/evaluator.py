@@ -31,7 +31,7 @@ log = logging.getLogger("crbot")
 
 RESULT_VALUE = {"win": 1.0, "draw": 0.5, "loss": 0.0}
 ROLE_KIND = {"tank": "heavy", "tank_killer": "light", "splash": "light", "support": "light",
-             "cycle": "swarm", "building": "building"}
+             "cycle": "swarm", "building": "building", "siege": "building"}
 
 
 def simulate(state: GameState, action: Action, cfg: dict) -> GameState:

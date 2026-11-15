@@ -44,8 +44,11 @@ def find_game_rect(img: np.ndarray) -> Optional[tuple[int, int, int, int]]:
         return None
     y1, y2 = _longest_run(bright[:, x1:x2].mean(axis=1) > 0.3)
     expected_h = (x2 - x1) * 16 / 9
-    if y2 - y1 > expected_h * 1.03:      # sobra por arriba: barra de título del emulador
-        y1 = y2 - int(expected_h)
+    h = img.shape[0]
+    if h - y2 < 0.03 * h:                # filas oscuras al pie (p. ej. pantalla final): es juego
+        y2 = h
+    if y2 - y1 > expected_h * 0.92:      # altura por proporción 9:16: no depende de zonas oscuras
+        y1 = max(0, y2 - int(round(expected_h)))
     if y2 - y1 < 150 or not 0.42 <= (x2 - x1) / (y2 - y1) <= 0.66:
         return None
     return x1, y1, x2, y2

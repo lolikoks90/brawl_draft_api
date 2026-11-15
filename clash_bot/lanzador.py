@@ -103,7 +103,7 @@ class App:
     def __init__(self, root: tk.Tk):
         self.root = root
         root.title("Bot de Clash Royale")
-        root.geometry("900x720")
+        root.geometry("1000x760")
         self.runner = Runner(self)
 
         nb = ttk.Notebook(root)
@@ -122,7 +122,7 @@ class App:
         self.status.pack(side="left")
         ttk.Button(bar, text="⏹ Detener", command=self.runner.stop).pack(side="right")
         ttk.Button(bar, text="Copiar registro", command=self.copy_log).pack(side="right", padx=4)
-        self.text = tk.Text(bottom, height=14, wrap="word", font=("Consolas", 9))
+        self.text = tk.Text(bottom, height=8, wrap="word", font=("Consolas", 9))
         sb = ttk.Scrollbar(bottom, command=self.text.yview)
         self.text.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y")
@@ -273,16 +273,16 @@ class App:
         nb.add(f, text="3. Cartas")
         self._help(f, "El bot necesita saber cuál es cada carta. Paso 1: entra en una batalla de entrenamiento, "
                       "pulsa el botón de abajo y JUEGA TÚ la partida usando todas tus cartas (el bot sólo mira). "
-                      "Paso 2: cuando termine, pulsa 'Mostrar cartas vistas', elige el nombre de cada imagen y guarda. "
+                      "Paso 2: cuando termine, pulsa 'Mostrar cartas vistas' y elige el nombre de cada imagen. Paso 3: guarda. "
                       "Si una carta sale REPETIDA (por ejemplo en gris y en color), ponle el MISMO nombre a todas. "
                       "Elige '(ignorar)' sólo si la imagen está cortada o no es una carta.")
         ttk.Button(f, text="Paso 1) Mirar mis cartas mientras juego yo una partida",
                    command=self.watch_cards).pack(fill="x", pady=2)
         ttk.Button(f, text="Paso 2) Mostrar cartas vistas", command=self.show_cards).pack(fill="x", pady=2)
+        ttk.Button(f, text="💾 Paso 3) Guardar cartas", command=self.save_cards).pack(fill="x", pady=2)
         self.cards_frame = ttk.Frame(f)
         self.cards_frame.pack(fill="x", pady=6)
         self.card_rows = []
-        ttk.Button(f, text="💾 Guardar cartas", command=self.save_cards).pack(anchor="e")
 
     def watch_cards(self) -> None:
         self.log("Juega tú la partida. Al terminar, el programa vuelve a aparecer.\n")
@@ -310,17 +310,17 @@ class App:
             if not e.get("img") or not img_path.exists():
                 continue
             cell = ttk.Frame(self.cards_frame)
-            cell.grid(row=shown // 6, column=shown % 6, padx=4, pady=4)
+            cell.grid(row=shown // 8, column=shown % 8, padx=3, pady=2)
             try:
                 img = tk.PhotoImage(file=str(img_path))
-                if img.height() > 110:
-                    img = img.subsample(2) if img.height() > 220 else img
+                if img.height() > 70:
+                    img = img.subsample(2)
                 lbl = ttk.Label(cell, image=img)
                 lbl.image = img
                 lbl.pack()
             except tk.TclError:
                 ttk.Label(cell, text="(imagen)").pack()
-            cb = ttk.Combobox(cell, width=18, state="readonly", values=options)
+            cb = ttk.Combobox(cell, width=14, state="readonly", values=options)
             name = e.get("name")
             cb.set("(ignorar)" if name == "__ignorar__" else (name if name in deck else "(sin identificar)"))
             cb.pack()

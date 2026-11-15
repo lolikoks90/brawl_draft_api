@@ -500,6 +500,10 @@ class CardMemory:
     def enrich(self, card: HandCard) -> None:
         e = self.find(card.hash)
         if e is None:
+            if not card.available:
+                # En gris la carta lleva una animación de recarga que cambia su aspecto a cada
+                # momento; sólo se registran cartas en color (las grises no se pueden jugar).
+                return
             prev = self._pending.get(card.slot)
             n = prev[1] + 1 if prev and hamming(prev[0], card.hash) <= self.max_dist else 1
             self._pending[card.slot] = (card.hash, n)

@@ -40,13 +40,20 @@ class ScreenDetector:
         return float((cv2.inRange(hsv, np.array(lo, np.uint8), np.array(hi, np.uint8)) > 0).mean())
 
     def classify(self, frame: np.ndarray, state: GameState) -> Screen:
-        if state.in_battle:
-            return Screen.BATTLE
-        if self.button_fill(frame, self.s["ok_button_roi"], self.s["ok_button_hsv"]) >= self.s["min_button_fill"]:
-            return Screen.END
+        # Los botones mandan: la barra inferior del menú puede confundirse con la de elixir.
+        screen = Screen.UNKNOWN
         if self.button_fill(frame, self.s["battle_button_roi"], self.s["battle_button_hsv"]) >= self.s["min_button_fill"]:
-            return Screen.MENU
-        return Screen.UNKNOWN
+            screen = Screen.MENU
+        elif (state.elixir < 0.3 and
+              self.button_fill(frame, self.s["ok_button_roi"], self.s["ok_button_hsv"]) >= self.s["min_button_fill"]):
+            screen = Screen.END
+        elif state.in_battle:
+            return Screen.BATTLE
+        if state.in_battle:          # no es batalla: descartar lo leído como si lo fuera
+            state.in_battle = False
+            state.hand, state.allies, state.enemy_spells = [], [], []
+            state.threats_own_half, state.threats_enemy_half = [], []
+        return screen
 
     def debug_info(self, frame: np.ndarray) -> dict:
         return {"ok_fill": round(self.button_fill(frame, self.s["ok_button_roi"], self.s["ok_button_hsv"]), 3),

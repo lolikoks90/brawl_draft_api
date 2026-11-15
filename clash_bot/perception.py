@@ -21,6 +21,36 @@ log = logging.getLogger("crbot")
 # CAPTURA
 # =============================================================================
 
+def _longest_run(flags: np.ndarray) -> tuple[int, int]:
+    best, start = (0, 0), None
+    for i, v in enumerate(list(flags) + [False]):
+        if v and start is None:
+            start = i
+        elif not v and start is not None:
+            if i - start > best[1] - best[0]:
+                best = (start, i)
+            start = None
+    return best
+
+
+def find_game_rect(img: np.ndarray) -> Optional[tuple[int, int, int, int]]:
+    """Localiza el juego (franja vertical 9:16) dentro de una ventana con bandas negras.
+
+    Devuelve (x1, y1, x2, y2) en píxeles de la imagen, o None si no se ve claro.
+    """
+    bright = img[..., :3].max(axis=2) > 24
+    x1, x2 = _longest_run(bright.mean(axis=0) > 0.3)
+    if x2 - x1 < 100:
+        return None
+    y1, y2 = _longest_run(bright[:, x1:x2].mean(axis=1) > 0.3)
+    expected_h = (x2 - x1) * 16 / 9
+    if y2 - y1 > expected_h * 1.03:      # sobra por arriba: barra de título del emulador
+        y1 = y2 - int(expected_h)
+    if y2 - y1 < 150 or not 0.42 <= (x2 - x1) / (y2 - y1) <= 0.66:
+        return None
+    return x1, y1, x2, y2
+
+
 class ScreenCapture:
     """Captura el área de juego del emulador con mss."""
 
@@ -71,6 +101,22 @@ class ScreenCapture:
                 log.warning("No he podido poner el emulador delante: %s", exc)
         time.sleep(0.8)
         self.region = self._locate()
+
+    def auto_fit(self) -> Optional[dict]:
+        """Ajusta los márgenes solo, buscando el juego dentro de la ventana del emulador."""
+        if self.window is None:
+            return None
+        w = self.window
+        full = {"left": w.left, "top": w.top, "width": w.width, "height": w.height}
+        rect = find_game_rect(np.asarray(self.sct.grab(full)))
+        if rect is None:
+            return None
+        x1, y1, x2, y2 = rect
+        margins = {"top": int(y1), "bottom": int(w.height - y2), "left": int(x1), "right": int(w.width - x2)}
+        self.cfg["window_margins"] = margins
+        self.region = self._locate()
+        log.info("Juego localizado dentro de la ventana; márgenes: %s", margins)
+        return margins
 
     def grab(self) -> np.ndarray:
         raw = np.asarray(self.sct.grab(self.region))

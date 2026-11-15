@@ -251,7 +251,9 @@ def _find_button(frame, hsv_range, y_from: float, y_to: float):
     mask = cv2.inRange(hsv, np.array(lo, np.uint8), np.array(hi, np.uint8))
     mask[: int(y_from * h)] = 0
     mask[int(y_to * h):] = 0
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    k = max(5, int(0.04 * w)) | 1          # une el botón por encima del texto blanco
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))
     n, _, stats, _ = cv2.connectedComponentsWithStats(mask)
     if n <= 1:
         return None
@@ -273,6 +275,9 @@ def calibrate(cfg: dict, expect: Optional[str] = None, delay: float = 0) -> bool
         print(f"Poniendo el emulador delante y capturando en {delay:.0f} segundos...", flush=True)
         cap.focus()
         time.sleep(delay)
+    margins = cap.auto_fit()
+    if margins:
+        save_settings({"window_margins": margins})
     frame = cap.grab()
     ok = True
 
@@ -287,13 +292,17 @@ def calibrate(cfg: dict, expect: Optional[str] = None, delay: float = 0) -> bool
     print("\n=== CALIBRACIÓN", f"({expect})" if expect else "", "===")
     if cap.found:
         good(f"Ventana del emulador encontrada ('{cfg['window_title']}').")
+        if margins:
+            good(f"Juego localizado dentro de la ventana (márgenes guardados: {margins}).")
+        else:
+            print("  AVISO No he podido localizar el juego dentro de la ventana; uso los márgenes guardados.")
     else:
         bad(f"No encuentro una ventana llamada '{cfg['window_title']}'. En el lanzador pulsa "
             "'Detectar ventanas' y elige la del emulador.")
 
     sc = cfg["screens"]
     if expect == "menu":
-        found = _find_button(frame, sc["battle_button_hsv"], 0.55, 0.95)
+        found = _find_button(frame, sc["battle_button_hsv"], 0.71, 0.90)
         if found:
             sc["battle_button_roi"], sc["battle_button"] = found
             save_settings({"screens": {"battle_button_roi": found[0], "battle_button": found[1]}})
@@ -393,6 +402,7 @@ def main() -> int:
     bot = Bot(CONFIG, debug=args.debug, collect=args.collect, play=not args.no_play,
               max_games=args.max_games)
     bot.capture.focus()
+    bot.capture.auto_fit()
     time.sleep(1)
     try:
         bot.run()

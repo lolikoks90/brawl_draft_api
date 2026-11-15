@@ -486,7 +486,7 @@ class CardMemory:
     lanzador (pestaña "Cartas"). Sólo se deduce sola si su coste es único en el mazo.
     """
 
-    STABLE_FRAMES = 6    # una carta nueva debe verse igual varios frames (evita animaciones)
+    STABLE_FRAMES = 25   # una carta nueva debe verse igual varios frames (evita animaciones)
 
     def __init__(self, path: Path, deck: dict, max_dist: int):
         self.path = path

@@ -151,6 +151,15 @@ class TacticalEngine:
             roles = [r for r in roles if r != "spell_small"]
         targets = [u for u in sit.threats if u.label == sit.label] if sit.label else sit.threats
         lead = max(targets, key=lambda u: u.tile[1])
+        # Respuesta proporcionada: no vaciar el elixir sobre la misma amenaza. En una ventana
+        # de unos segundos se permite 1 carta por unidad enemiga (+1 si es un tanque); la
+        # ventana se acorta cuando la amenaza ya está encima de la torre.
+        window = self.t["defend_window_s"] * (0.5 if lead.tile[1] >= 23 else 1.0)
+        recent = sum(1 for t, a in self.history
+                     if a.rule == "defend" and ctx.now - t < window
+                     and (a.tile[0] < self.cols / 2) == (sit.lane == "left"))
+        if recent >= len(sit.threats) + (1 if sit.kind == "heavy" else 0):
+            return []
         cx = int(round(np.mean([u.tile[0] for u in targets])))
         cy = int(round(np.mean([u.tile[1] for u in targets])))
         tower_col = self.lane_col(sit.lane)

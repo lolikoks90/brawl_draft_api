@@ -160,6 +160,7 @@ class Navigator:
         self.max_games = max_games or self.s["max_games"]
         self.games_started = 0
         self.games_completed = 0
+        self.last_battle_tap = 0.0
         self.last_tap = 0.0
         self.last_known = time.time()
         self.next_battle_at = 0.0
@@ -178,6 +179,8 @@ class Navigator:
         if now - self.last_tap < 2.0:
             return
         if screen == Screen.END:
+            if now - self.last_battle_tap < 30:
+                return        # buscando rival: esa pantalla se parece a la final, no tocar nada
             log.info("Pantalla final: pulsando OK")
             self.controls.tap_fraction(*self.s["ok_button"])
             self.last_tap = now
@@ -187,7 +190,7 @@ class Navigator:
             log.info("Menú principal: buscando partida (%d)", self.games_started + 1)
             self.controls.tap_fraction(*self.s["battle_button"])
             self.games_started += 1
-            self.last_tap = now
+            self.last_tap = self.last_battle_tap = now
         elif screen == Screen.UNKNOWN and now - self.last_known > self.s["unknown_action_after_s"]:
             log.info("Pantalla desconocida durante %ds: pulsando 'atrás'", self.s["unknown_action_after_s"])
             self.controls.press(self.s["back_key"])

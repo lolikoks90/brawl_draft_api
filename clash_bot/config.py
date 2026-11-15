@@ -104,6 +104,7 @@ CONFIG = {
     "tactics": {
         "punish_opp_elixir_max": 3.0,   # atacar si el rival tiene <= este elixir estimado
         "punish_min_own_elixir": 5.0,
+        "defend_window_s": 6.0,
         "tank_push_elixir": 7.0,
         "tank_push_elixir_double": 6.0,
         "leak_elixir": 9.5,

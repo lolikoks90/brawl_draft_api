@@ -274,7 +274,8 @@ class App:
         self._help(f, "El bot necesita saber cuál es cada carta. Paso 1: entra en una batalla de entrenamiento, "
                       "pulsa el botón de abajo y JUEGA TÚ la partida usando todas tus cartas (el bot sólo mira). "
                       "Paso 2: cuando termine, pulsa 'Mostrar cartas vistas', elige el nombre de cada imagen y guarda. "
-                      "Si una imagen no es una carta o está repetida/borrosa, elige '(ignorar)'.")
+                      "Si una carta sale REPETIDA (por ejemplo en gris y en color), ponle el MISMO nombre a todas. "
+                      "Elige '(ignorar)' sólo si la imagen está cortada o no es una carta.")
         ttk.Button(f, text="Paso 1) Mirar mis cartas mientras juego yo una partida",
                    command=self.watch_cards).pack(fill="x", pady=2)
         ttk.Button(f, text="Paso 2) Mostrar cartas vistas", command=self.show_cards).pack(fill="x", pady=2)
@@ -357,7 +358,17 @@ class App:
         self.show_view = tk.BooleanVar(value=True)
         ttk.Checkbutton(row, text="Mostrar lo que ve el bot", variable=self.show_view).pack(side="left", padx=10)
         ttk.Button(f, text="▶ JUGAR", command=self.play).pack(fill="x", pady=8)
+        ttk.Button(f, text="📂 Abrir carpeta de capturas (lo que veía el bot en cada jugada)",
+                   command=self.open_captures).pack(anchor="w", pady=2)
         ttk.Button(f, text="📊 Ver estadísticas", command=lambda: self.runner.start(["--stats"], "Estadísticas")).pack(anchor="w")
+
+    def open_captures(self) -> None:
+        d = BASE / "capturas"
+        d.mkdir(exist_ok=True)
+        if sys.platform == "win32":
+            os.startfile(d)
+        else:
+            self.log(f"Capturas en: {d}\n")
 
     def play(self) -> None:
         args = ["--max-games", str(int(self.games.get() or 0))]

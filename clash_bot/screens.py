@@ -169,6 +169,7 @@ class Navigator:
 
     def on_game_over(self, now: float) -> None:
         self.games_completed += 1
+        self.last_known = now
         self.next_battle_at = now + random.uniform(*self.s["pause_between_games_s"])
 
     def step(self, screen: Screen, now: float) -> None:

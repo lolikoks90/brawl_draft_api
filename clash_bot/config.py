@@ -91,7 +91,7 @@ CONFIG = {
         "ok_button_hsv": ((95, 120, 150), (115, 255, 255)),
         "min_button_fill": 0.35,
         "end_confirm_s": 1.5,        # s sin barra de elixir para dar la partida por terminada
-        "unknown_action_after_s": 20,  # atascado en pantalla desconocida -> pulsar "atrás"
+        "unknown_action_after_s": 45,  # atascado en pantalla desconocida -> pulsar "atrás"
         "back_key": "esc",           # tecla "atrás" del emulador
         "pause_between_games_s": (3.0, 8.0),
         "max_games": 0,              # 0 = sin límite (también --max-games)

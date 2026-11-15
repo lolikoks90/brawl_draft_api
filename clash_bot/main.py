@@ -188,11 +188,35 @@ class Bot:
         log.info("[%.1f elixir | rival ~%.1f | x%.0f] %s -> slot %d, baldosa %s (%s)",
                  state.elixir, self.ctx.opp_elixir, self.ctx.multiplier, action.reason,
                  action.slot + 1, action.tile, self.learner.arm_key(action))
+        self._save_debug(frame, state, action)
         self.controls.play(action)
         self.last_play = time.time()
         self.plays += 1
         self.engine.notify_played(action, self.last_play)
         self.pending_cost = (action.card_hash, state.elixir, self.last_play)
+
+    def _save_debug(self, frame, state: GameState, action) -> None:
+        """Guarda lo que veía el bot al decidir cada jugada (carpeta capturas/, máx. 40)."""
+        try:
+            d = BASE_DIR / "capturas"
+            d.mkdir(exist_ok=True)
+            if not getattr(self, "_debug_cleared", False):
+                for f in d.glob("*.jpg"):
+                    f.unlink()
+                self._debug_cleared, self._debug_n = True, 0
+            if self._debug_n >= 40:
+                return
+            self._debug_n += 1
+            img = draw_overlay(frame, self.cfg, state, action.reason[:40])
+            r = self.capture.region
+            x1, y1, x2, y2 = self.cfg["arena_roi"]
+            cols, rows = self.cfg["arena_tiles"]
+            px = int((x1 + (action.tile[0] + 0.5) / cols * (x2 - x1)) * r["width"])
+            py = int((y1 + (action.tile[1] + 0.5) / rows * (y2 - y1)) * r["height"])
+            cv2.drawMarker(img, (px, py), (0, 255, 255), cv2.MARKER_TILTED_CROSS, 24, 3)
+            cv2.imwrite(str(d / f"jugada_{self._debug_n:02d}.jpg"), img, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        except Exception as exc:
+            log.debug("No pude guardar la captura de depuración: %s", exc)
 
     # ---- bucle ----------------------------------------------------------------
     def step(self) -> None:

@@ -377,6 +377,7 @@ class Perception:
                 m[y1:y2, x1:x2] = 0
             r1, r2 = self.cfg["river_rows"]
             m[int(r1 / self.rows * ah):int((r2 + 1) / self.rows * ah), :] = 0
+            m[int((self.rows - 1.5) / self.rows * ah):, :] = 0   # borde inferior: farolas y adornos
             self._static_mask = m
         return self._static_mask
 
@@ -472,7 +473,12 @@ class CardMemory:
         self._pending: dict[int, tuple[int, int]] = {}
         if path.exists():
             try:
-                self.entries = json.loads(path.read_text(encoding="utf-8"))
+                entries = json.loads(path.read_text(encoding="utf-8"))
+                # Entradas antiguas sin imagen (versiones previas, nombres poco fiables): fuera.
+                self.entries = [e for e in entries if e.get("img") and (self.img_dir / e["img"]).exists()]
+                if len(self.entries) != len(entries):
+                    log.info("Descartadas %d cartas antiguas sin imagen.", len(entries) - len(self.entries))
+                    self.save()
                 log.info("Cargadas %d cartas de %s", len(self.entries), path)
             except Exception:
                 log.warning("cards_db corrupto; empezando de cero.")

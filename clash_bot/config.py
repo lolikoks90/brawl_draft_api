@@ -16,24 +16,27 @@ CONFIG = {
     "target_fps": 30,
 
     # --- ROIs (fracciones del área de juego) --------------------------------------
-    "elixir_roi": (0.285, 0.958, 0.975, 0.972),   # x1, y1, x2, y2
+    # Medidas tomadas de una captura real (Google Play Games, 549x975).
+    "elixir_roi": (0.274, 0.972, 0.968, 0.988),   # x1, y1, x2, y2
+    # Gota morada a la izquierda de la barra: sólo existe en batalla.
+    "elixir_icon_roi": (0.222, 0.968, 0.258, 0.990),
     "card_rois": [
-        (0.235, 0.835, 0.410, 0.945),
-        (0.420, 0.835, 0.595, 0.945),
-        (0.605, 0.835, 0.780, 0.945),
-        (0.790, 0.835, 0.965, 0.945),
+        (0.232, 0.838, 0.395, 0.954),
+        (0.419, 0.838, 0.583, 0.954),
+        (0.605, 0.838, 0.772, 0.954),
+        (0.791, 0.838, 0.957, 0.954),
     ],
-    "arena_roi": (0.025, 0.075, 0.975, 0.795),
+    "arena_roi": (0.083, 0.072, 0.925, 0.781),
     "arena_tiles": (18, 32),
     "river_rows": (15, 16),
 
     # Torres en baldosas (col1, fila1, col2, fila2) con extremo exclusivo.
     "towers": {
-        "enemy_left": (2, 5, 6, 9),
-        "enemy_right": (12, 5, 16, 9),
+        "enemy_left": (2, 5, 5, 8),
+        "enemy_right": (13, 5, 16, 8),
         "enemy_king": (7, 1, 11, 5),
-        "own_left": (2, 23, 6, 27),
-        "own_right": (12, 23, 16, 27),
+        "own_left": (2, 24, 5, 27),
+        "own_right": (13, 24, 16, 27),
         "own_king": (7, 27, 11, 31),
     },
     # Una torre se da por destruida si su color de equipo cae por debajo de esta fracción

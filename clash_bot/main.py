@@ -104,6 +104,7 @@ class Bot:
         self.pending_cost = None
         self.threat_seen, self.clear_since = False, None
         self.match.start(now)
+        self.perception.reset_background()
         self.opponent.reset(state.elixir, now)   # ambos empiezan con el mismo elixir
         self.engine.history.clear()
         self.learner.start_game()

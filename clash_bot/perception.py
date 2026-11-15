@@ -292,30 +292,55 @@ class Perception:
         self._frame_idx = 0
         self._cache = ([], [], [])
         self._static_mask: Optional[np.ndarray] = None
+        self._bg: Optional[np.ndarray] = None       # fondo de la arena (float32)
+        self._bg_samples: list[np.ndarray] = []
+
+    def reset_background(self) -> None:
+        """Llamar al empezar cada partida: el fondo se aprende con la arena vacía."""
+        self._bg = None
+        self._bg_samples = []
+
+    def _foreground(self, arena: np.ndarray) -> Optional[np.ndarray]:
+        """Máscara de lo que NO es escenario (tropas, proyectiles). None mientras aprende el fondo.
+
+        Muchas arenas tienen caminos y adornos rojos/azules; sólo cuenta como tropa el color
+        de equipo que además se diferencia del fondo aprendido.
+        """
+        if self._bg is None or self._bg.shape != arena.shape:
+            if self._bg_samples and self._bg_samples[0].shape != arena.shape:
+                self._bg_samples = []
+            self._bg_samples.append(arena.copy())
+            if len(self._bg_samples) < 8:
+                return None
+            self._bg = np.median(np.stack(self._bg_samples), axis=0).astype(np.float32)
+            self._bg_samples = []
+        diff = cv2.absdiff(arena, cv2.convertScaleAbs(self._bg)).max(axis=2) > 32
+        fg = cv2.dilate(diff.astype(np.uint8) * 255, np.ones((5, 5), np.uint8))
+        # El fondo se adapta rápido donde no hay nada y muy despacio bajo las tropas.
+        alpha = np.where(fg > 0, 0.003, 0.05).astype(np.float32)[..., None]
+        self._bg = self._bg * (1 - alpha) + arena.astype(np.float32) * alpha
+        return fg
 
     # ---- Elixir ---------------------------------------------------------------
     def read_elixir(self, frame: np.ndarray) -> tuple[float, bool]:
+        """(elixir 0..10, en_batalla). En batalla = se ve la gota morada junto a la barra."""
+        icon = crop(frame, self.cfg["elixir_icon_roi"])
         bar = crop(frame, self.cfg["elixir_roi"])
-        if bar.size == 0:
+        if bar.size == 0 or icon.size == 0:
             return 0.0, False
-        hsv = cv2.cvtColor(bar, cv2.COLOR_BGR2HSV)
-        mask = cv2.inRange(hsv, self.e_low, self.e_high)
-        col_fill = (mask > 0).mean(axis=0) > 0.4
-        dark = bool((hsv[..., 2] < 70).mean() > 0.6)
-        if not col_fill.any():
-            return 0.0, dark
-        filled, gap = 0, 0
-        for v in col_fill:
-            if v:
-                filled += 1 + gap
-                gap = 0
-            else:
-                gap += 1
-                if gap > max(3, len(col_fill) // 60):
-                    break
-        # Exigir un tramo contiguo desde la izquierda: evita falsos positivos en menús.
-        visible = bool(col_fill[: max(2, len(col_fill) // 40)].any()) or dark
-        return round(10.0 * filled / len(col_fill), 1), visible
+        icon_mask = cv2.inRange(cv2.cvtColor(icon, cv2.COLOR_BGR2HSV), self.e_low, self.e_high)
+        if (icon_mask > 0).mean() < 0.3:
+            return 0.0, False
+        mask = cv2.inRange(cv2.cvtColor(bar, cv2.COLOR_BGR2HSV), self.e_low, self.e_high)
+        col_fill = ((mask > 0).mean(axis=0) > 0.4).astype(np.uint8)
+        # Quitar ruido suelto; el número de elixir tapa el inicio de la barra, así que se
+        # mide hasta dónde llega el relleno (última columna morada), no un tramo continuo.
+        k = max(3, len(col_fill) // 50)
+        col_fill = cv2.morphologyEx(col_fill.reshape(1, -1), cv2.MORPH_OPEN, np.ones((1, k), np.uint8)).ravel()
+        idx = np.flatnonzero(col_fill)
+        if idx.size == 0:
+            return 0.0, True
+        return round(min(10.0, 10.0 * (idx[-1] + 1) / len(col_fill)), 1), True
 
     # ---- Cartas ---------------------------------------------------------------
     def read_hand(self, frame: np.ndarray) -> list[HandCard]:
@@ -395,8 +420,11 @@ class Perception:
     def _units_color(self, frame: np.ndarray):
         arena = crop(frame, self.cfg["arena_roi"])
         ah, aw = arena.shape[:2]
+        fg = self._foreground(arena)
+        if fg is None:
+            return [], [], []
         hsv = cv2.cvtColor(arena, cv2.COLOR_BGR2HSV)
-        static = self._mask_static(ah, aw)
+        static = self._mask_static(ah, aw) & fg
         enemies = self._blobs(mask_ranges(hsv, self.red) & static, aw, ah)
         allies = self._blobs(mask_ranges(hsv, self.blue) & static, aw, ah)
         return enemies, allies, []

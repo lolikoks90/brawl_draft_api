@@ -9,6 +9,8 @@ Clash Royale - bot autónomo (captura -> percepción -> decisión -> acción) en
           contextual (UCB) que aprende de cada victoria/derrota (learner_db.json).
   Fase 3  Imitación: una red entrenada con vídeos de profesionales y con las victorias
           del propio bot propone jugadas; se reentrena sola cada N partidas.
+  Eval.   Estilo Stockfish: una red de valor estima la probabilidad de ganar y cada jugada
+          candidata se puntúa por cómo cambia esa probabilidad (evaluator.py).
 
 Módulos: config.py (todo lo ajustable), perception.py, opponent.py, tactics.py,
 learner.py, screens.py, imitation.py, controls.py, tools.py.
@@ -44,6 +46,7 @@ from typing import Optional
 import cv2
 
 from config import CONFIG, DECK
+from evaluator import ValueEvaluator, train_value
 from imitation import GameRecorder, ImitationPolicy, VideoIngestor, train_policy
 from learner import Learner
 from opponent import OpponentModel
@@ -77,6 +80,7 @@ class Bot:
         self.learner = Learner(cfg, BASE_DIR)
         self.recorder = GameRecorder(cfg, BASE_DIR)
         self.policy = ImitationPolicy(cfg, BASE_DIR)
+        self.value = ValueEvaluator(cfg, BASE_DIR)
         self.navigator = Navigator(cfg, self.controls, max_games)
         self.stats = Stats(BASE_DIR / cfg["stats_file"])
         self.collector = DatasetCollector(cfg, BASE_DIR) if collect else None
@@ -117,9 +121,11 @@ class Bot:
         every = self.cfg["imitation"]["auto_retrain_every_games"]
         if self.cfg["imitation"]["enabled"] and every and self.games_since_retrain >= every:
             self.games_since_retrain = 0
-            log.info("Reentrenando la política de imitación con las últimas partidas...")
+            log.info("Reentrenando la política de imitación y la red de valor...")
             if train_policy(self.cfg, BASE_DIR):
                 self.policy.reload()
+            if self.cfg["value"]["enabled"] and train_value(self.cfg, BASE_DIR):
+                self.value.reload()
 
     def _check_cost_measurement(self, state: GameState, now: float) -> None:
         if not self.pending_cost:
@@ -166,6 +172,7 @@ class Bot:
         sit, cands = self.engine.candidates(state, self.ctx)
         cands += self.policy.propose(state, self.ctx, self.engine)
         cands.sort(key=lambda a: -a.prior)
+        self.value.rerank(state, self.ctx, cands)      # "Stockfish": evalúa el tablero tras cada jugada
         action = self.learner.choose(sit, state.elixir, self.ctx, cands)
         self.recorder.record(state, self.ctx, action)
         if action is None:
@@ -261,7 +268,7 @@ def main() -> int:
     p.add_argument("--train", metavar="DATA_YAML", help="entrena el detector YOLO")
     p.add_argument("--epochs", type=int, default=100)
     p.add_argument("--ingest-videos", metavar="CARPETA", help="extrae jugadas de vídeos (fase 3)")
-    p.add_argument("--train-policy", action="store_true", help="entrena la política de imitación")
+    p.add_argument("--train-policy", action="store_true", help="entrena la política de imitación y la red de valor")
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args()
 
@@ -278,7 +285,9 @@ def main() -> int:
         train_policy(CONFIG, BASE_DIR)
         return 0
     if args.train_policy:
-        return 0 if train_policy(CONFIG, BASE_DIR) else 1
+        ok_p = train_policy(CONFIG, BASE_DIR)
+        ok_v = train_value(CONFIG, BASE_DIR)
+        return 0 if (ok_p or ok_v) else 1
     if args.calibrate:
         calibrate(CONFIG)
         return 0

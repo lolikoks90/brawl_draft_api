@@ -24,6 +24,7 @@ Parar: ratón a una esquina, Ctrl+C o `q` en la ventana de depuración.
 |---|---|---|
 | 1. Autonomía | Busca partida, juega, pulsa OK y repite. Torres/coronas, elixir y ciclo del rival, tácticas (defensa, castigo, contraataque, apoyo al tanque, hechizos de valor, fuga de elixir). | `screens.py`, `opponent.py`, `tactics.py` |
 | 2. Refuerzo | Bandido contextual (UCB): aprende qué jugada funciona en cada situación a partir de victorias/derrotas y torres ganadas/perdidas. | `learner.py` → `learner_db.json` |
+| Evaluación (estilo Stockfish) | Red de valor que estima la probabilidad de ganar; antes de cada jugada simula el tablero resultante de cada opción y prioriza la que más la sube. Se entrena sola tras 20 partidas. | `evaluator.py` → `value.pt` |
 | 3. Imitación | Red que imita a profesionales (vídeos) y las victorias del propio bot. Se reentrena sola cada 10 partidas. | `imitation.py` → `policy.pt` |
 
 ### Fase 3 con vídeos de profesionales
@@ -44,5 +45,5 @@ python main.py --train dataset/data.yaml
 ```
 
 ## Archivos que genera
-`cards_db.json` (cartas aprendidas), `learner_db.json` (fase 2), `policy_data/` y `policy.pt`
-(fase 3), `match_history.jsonl` (resultados). Borra uno para reiniciar ese aprendizaje.
+`cards_db.json` (cartas aprendidas), `learner_db.json` (fase 2), `policy_data/`, `policy.pt` y `value.pt`
+(fase 3 y evaluación), `match_history.jsonl` (resultados). Borra uno para reiniciar ese aprendizaje.

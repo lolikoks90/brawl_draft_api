@@ -121,6 +121,15 @@ CONFIG = {
         "wait_decision_interval_s": 3.0,
     },
 
+    # ============== Evaluación de posiciones estilo Stockfish (evaluator.py) =======
+    "value": {
+        "enabled": True,
+        "model": "value.pt",
+        "weight": 0.5,        # cuánto pesa la ventaja estimada sobre la prioridad de las reglas
+        "min_games": 20,      # partidas con resultado necesarias antes de entrenarla
+        "epochs": 30,
+    },
+
     # ======================== FASE 3: aprendizaje por imitación ===================
     "imitation": {
         "enabled": True,

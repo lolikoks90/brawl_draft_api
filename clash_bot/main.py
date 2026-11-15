@@ -217,7 +217,12 @@ class Bot:
     def run(self) -> None:
         period = 1.0 / self.cfg["target_fps"]
         log.info("Bot en marcha. %s", self.stats.summary())
+        stop_file = BASE_DIR / "STOP"
         while True:
+            if stop_file.exists():          # el lanzador pide parar de forma ordenada
+                stop_file.unlink(missing_ok=True)
+                log.info("Parada solicitada desde el lanzador.")
+                return
             t0 = time.perf_counter()
             self.step()
             if not self.in_match and self.navigator.finished():
@@ -230,20 +235,100 @@ class Bot:
 # COMANDOS
 # =============================================================================
 
-def calibrate(cfg: dict) -> None:
-    frame = ScreenCapture(cfg).grab()
+def _find_button(frame, hsv_range, y_from: float, y_to: float):
+    """Mayor mancha del color del botón en la franja vertical indicada -> (roi, centro) en fracciones."""
+    import numpy as np
+    h, w = frame.shape[:2]
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    lo, hi = hsv_range
+    mask = cv2.inRange(hsv, np.array(lo, np.uint8), np.array(hi, np.uint8))
+    mask[: int(y_from * h)] = 0
+    mask[int(y_to * h):] = 0
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    n, _, stats, _ = cv2.connectedComponentsWithStats(mask)
+    if n <= 1:
+        return None
+    k = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    x, y, bw, bh, area = stats[k]
+    if area < 0.004 * h * w:
+        return None
+    # Recorte interior (15 %) para quedarnos con el relleno del botón, no con el borde.
+    roi = [round((x + 0.15 * bw) / w, 3), round((y + 0.15 * bh) / h, 3),
+           round((x + 0.85 * bw) / w, 3), round((y + 0.85 * bh) / h, 3)]
+    return roi, [round((x + bw / 2) / w, 3), round((y + bh / 2) / h, 3)]
+
+
+def calibrate(cfg: dict, expect: Optional[str] = None) -> bool:
+    from config import save_settings
+
+    cap = ScreenCapture(cfg)
+    frame = cap.grab()
+    ok = True
+
+    def good(msg):
+        print("  OK  ", msg)
+
+    def bad(msg):
+        nonlocal ok
+        ok = False
+        print("  FALLO", msg)
+
+    print("\n=== CALIBRACIÓN", f"({expect})" if expect else "", "===")
+    if cap.found:
+        good(f"Ventana del emulador encontrada ('{cfg['window_title']}').")
+    else:
+        bad(f"No encuentro una ventana llamada '{cfg['window_title']}'. En el lanzador pulsa "
+            "'Detectar ventanas' y elige la del emulador.")
+
+    sc = cfg["screens"]
+    if expect == "menu":
+        found = _find_button(frame, sc["battle_button_hsv"], 0.55, 0.95)
+        if found:
+            sc["battle_button_roi"], sc["battle_button"] = found
+            save_settings({"screens": {"battle_button_roi": found[0], "battle_button": found[1]}})
+            good("He encontrado el botón amarillo 'Batalla' y he guardado su posición.")
+        else:
+            bad("No veo el botón amarillo 'Batalla'. ¿Está el juego en el menú principal?")
+    elif expect == "end":
+        found = _find_button(frame, sc["ok_button_hsv"], 0.7, 1.0)
+        if found:
+            sc["ok_button_roi"], sc["ok_button"] = found
+            save_settings({"screens": {"ok_button_roi": found[0], "ok_button": found[1]}})
+            good("He encontrado el botón azul 'OK' y he guardado su posición.")
+        else:
+            bad("No veo el botón azul 'OK'. ¿Está el juego en la pantalla de final de partida?")
+
     state = Perception(cfg, YoloDetector(cfg, BASE_DIR)).analyse(frame)
     det = ScreenDetector(cfg)
     screen = det.classify(frame, state)
+    names = {"menu": "menú principal", "battle": "batalla", "end": "final de partida", "unknown": "desconocida"}
+    if expect:
+        if screen.value == expect:
+            good(f"El bot reconoce esta pantalla como: {names[screen.value]}.")
+        else:
+            bad(f"Esperaba '{names[expect]}' pero el bot ve '{names[screen.value]}'.")
+    else:
+        print(f"  Pantalla reconocida: {names[screen.value]}")
+
+    if expect == "battle" or (expect is None and state.in_battle):
+        if state.in_battle and 0 < state.elixir <= 10:
+            good(f"Barra de elixir leída: {state.elixir} (comprueba que coincide con el juego).")
+        else:
+            bad("No consigo leer la barra de elixir. Revisa los márgenes de la ventana.")
+        n_cards = sum(1 for c in state.hand)
+        (good if n_cards == 4 else bad)(f"Cartas en mano detectadas: {n_cards} de 4.")
+        fills = MatchTracker(cfg)._fills(frame)
+        towers_ok = sum(v > 0.01 for v in fills.values())
+        (good if towers_ok == 6 else bad)(f"Torres reconocidas por su color: {towers_ok} de 6.")
+
     out = BASE_DIR / "calibration.png"
     cv2.imwrite(str(out), draw_overlay(frame, cfg, state, f"[{screen.value}]"))
-    print(f"Guardado {out}")
-    print(f"Pantalla detectada: {screen.value} | botones: {det.debug_info(frame)} "
-          f"(umbral {cfg['screens']['min_button_fill']})")
-    print(f"Elixir leído: {state.elixir} | cartas: {['ok' if c.available else 'gris' for c in state.hand]}")
-    fills = {k: round(v, 3) for k, v in MatchTracker(cfg)._fills(frame).items()}
-    print(f"Color de torres (en batalla debe ser > 0.01): {fills}")
-    print(f"Enemigos: {len(state.enemies)} | aliados: {len(state.allies)}")
+    print(f"\nImagen guardada en {out}")
+    print("Todo correcto." if ok else
+          "Hay fallos: mira la imagen. Los recuadros de colores deben caer encima de la barra de "
+          "elixir, las 4 cartas y la arena. Si no cuadran, ajusta los márgenes de la ventana "
+          "(o envía la imagen a quien te ayude).")
+    return ok
 
 
 def show_stats(cfg: dict) -> None:
@@ -265,10 +350,11 @@ def main() -> int:
     p.add_argument("--stats", action="store_true", help="resumen de partidas y aprendizaje")
     p.add_argument("--collect", action="store_true", help="guarda imágenes para entrenar YOLO")
     p.add_argument("--no-play", action="store_true", help="sólo observa, no hace clics")
-    p.add_argument("--train", metavar="DATA_YAML", help="entrena el detector YOLO")
+    p.add_argument("--train", metavar="ZIP_O_YAML", help="entrena YOLO con el ZIP de Roboflow o su data.yaml")
     p.add_argument("--epochs", type=int, default=100)
     p.add_argument("--ingest-videos", metavar="CARPETA", help="extrae jugadas de vídeos (fase 3)")
     p.add_argument("--train-policy", action="store_true", help="entrena la política de imitación y la red de valor")
+    p.add_argument("--expect", choices=["menu", "battle", "end"], help="pantalla que se calibra")
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args()
 
@@ -289,8 +375,7 @@ def main() -> int:
         ok_v = train_value(CONFIG, BASE_DIR)
         return 0 if (ok_p or ok_v) else 1
     if args.calibrate:
-        calibrate(CONFIG)
-        return 0
+        return 0 if calibrate(CONFIG, args.expect) else 1
 
     import pyautogui
     bot = Bot(CONFIG, debug=args.debug, collect=args.collect, play=not args.no_play,

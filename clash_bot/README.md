@@ -1,5 +1,21 @@
 # Bot de Clash Royale (emulador de PC)
 
+## Guía rápida (sin programar)
+1. **Descarga** esta carpeta (`clash_bot`) en tu PC con Windows y descomprímela, por ejemplo en el Escritorio.
+2. **Doble clic en `INSTALAR.bat`.** Si no tienes Python, se abre su web: descárgalo, instálalo
+   **marcando "Add python.exe to PATH"** y vuelve a hacer doble clic en `INSTALAR.bat`.
+3. **Doble clic en `INICIAR.bat`** y sigue las pestañas del programa:
+   - **1. Configurar:** elige la ventana del emulador y escribe tu mazo.
+   - **2. Calibrar:** pulsa un botón en cada pantalla (menú, batalla y final).
+   - **3. Jugar.**
+   - **4. Mejorar (opcional):** entrena el reconocimiento de tropas con Roboflow o aprende de vídeos.
+4. Si algo falla, pulsa **"Copiar registro"** y pega el texto a quien te ayude.
+
+Antes de empezar: escala de pantalla de Windows al 100 % y el emulador en vertical y visible.
+
+---
+
+## Uso por línea de comandos
 ## Instalación
 ```
 pip install mss opencv-python numpy pyautogui pygetwindow

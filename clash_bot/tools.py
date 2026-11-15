@@ -95,11 +95,47 @@ class DatasetCollector:
             log.info("Dataset: %d imágenes en %s", self.count, self.img_dir)
 
 
+def prepare_dataset(path: str, base_dir: Path) -> Path:
+    """Acepta el ZIP exportado de Roboflow (o su data.yaml) y deja las rutas listas para entrenar."""
+    import yaml
+    import zipfile
+
+    p = Path(path)
+    if p.suffix.lower() == ".zip":
+        dest = base_dir / "dataset_rf" / p.stem
+        dest.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(p) as z:
+            z.extractall(dest)
+        found = sorted(dest.rglob("data.yaml"))
+        if not found:
+            raise FileNotFoundError(f"El ZIP {p.name} no contiene data.yaml (¿exportaste en formato YOLO?)")
+        p = found[0]
+    root = p.parent
+    data = yaml.safe_load(p.read_text(encoding="utf-8"))
+    data["path"] = str(root.resolve())
+    for key, names in (("train", ["train"]), ("val", ["valid", "val"]), ("test", ["test"])):
+        for n in names:
+            if (root / n / "images").is_dir():
+                data[key] = f"{n}/images"
+                break
+        else:
+            if key == "test":
+                data.pop("test", None)
+            elif not (root / str(data.get(key, ""))).exists():
+                raise FileNotFoundError(f"No encuentro la carpeta de imágenes '{key}' en {root}")
+    if "val" not in data:
+        data["val"] = data["train"]
+    p.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
+    log.info("Dataset listo: %s (%s clases)", p, len(data.get("names", [])))
+    return p
+
+
 def train_yolo(cfg: dict, data_yaml: str, epochs: int) -> None:
     from ultralytics import YOLO
 
     y = cfg["yolo"]
     base_dir = Path(__file__).parent
+    data_yaml = str(prepare_dataset(data_yaml, base_dir))
     model = YOLO(y["base_weights"])
     results = model.train(data=data_yaml, epochs=epochs, imgsz=y["imgsz"], device=y["device"],
                           project=str(base_dir / "runs"), name="cr_yolo", exist_ok=True,

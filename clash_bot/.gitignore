@@ -9,3 +9,6 @@ learner_db.json
 match_history.jsonl
 policy_data/
 videos/
+ajustes.json
+STOP
+dataset_rf/

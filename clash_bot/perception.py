@@ -28,6 +28,7 @@ class ScreenCapture:
         import mss
         self.cfg = cfg
         self.sct = mss.mss()
+        self.found = False
         self.region = self._locate()
         log.info("Área de juego: %s", self.region)
 
@@ -43,6 +44,7 @@ class ScreenCapture:
                         w.restore()
                 except Exception:
                     pass
+                self.found = True
                 return {"left": w.left + m["left"], "top": w.top + m["top"],
                         "width": w.width - m["left"] - m["right"],
                         "height": w.height - m["top"] - m["bottom"]}

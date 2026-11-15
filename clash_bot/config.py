@@ -236,3 +236,46 @@ HIGH_VALUE_TARGETS = {"musketeer", "wizard", "witch", "executioner", "three_musk
 
 TEAM_PREFIXES = {"enemy_": "enemy", "red_": "enemy", "opp_": "enemy",
                  "ally_": "ally", "own_": "ally", "blue_": "ally"}
+
+
+# =============================================================================
+# AJUSTES DEL USUARIO (ajustes.json, lo escribe el lanzador y la calibración)
+# =============================================================================
+import json as _json
+from pathlib import Path as _Path
+
+SETTINGS_FILE = _Path(__file__).with_name("ajustes.json")
+
+
+def load_settings() -> dict:
+    try:
+        return _json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_settings(updates: dict) -> None:
+    """Mezcla `updates` con lo que ya hay en ajustes.json (los dicts se mezclan por clave)."""
+    s = load_settings()
+    for k, v in updates.items():
+        if isinstance(v, dict) and isinstance(s.get(k), dict) and k != "deck":
+            s[k].update(v)
+        else:
+            s[k] = v
+    SETTINGS_FILE.write_text(_json.dumps(s, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def apply_settings() -> None:
+    s = load_settings()
+    for k in ("window_title", "window_margins"):
+        if k in s:
+            CONFIG[k] = s[k]
+    if isinstance(s.get("screens"), dict):
+        CONFIG["screens"].update(s["screens"])
+    deck = s.get("deck")
+    if isinstance(deck, dict) and deck:
+        DECK.clear()
+        DECK.update({name: (int(cost), role) for name, (cost, role) in deck.items() if role in ROLES})
+
+
+apply_settings()

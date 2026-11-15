@@ -57,7 +57,7 @@ CONFIG = {
 
     # --- Detección por color (si no hay modelo YOLO) ------------------------------
     "threat_min_area": 12,
-    "threat_heavy_area": 140,
+    "threat_heavy_area": 600,
     "threat_swarm_count": 4,
 
     # --- Detección de tropas con YOLO (ultralytics) -------------------------------
@@ -164,14 +164,14 @@ DECK = {
     "Cannon": (3, "building"),
 }
 
-ROLES = ["tank", "tank_killer", "splash", "spell_small", "spell_big", "support", "cycle", "building", "siege"]
+ROLES = ["tank", "tank_killer", "splash", "spell_small", "spell_big", "support", "cycle", "building", "siege", "roll"]
 KINDS = ["heavy", "air", "swarm", "building", "light"]
 KIND_PRIORITY = ["heavy", "building", "air", "swarm", "light"]
 
 COUNTERS = {
     "heavy": ["tank_killer", "building", "siege", "cycle", "support"],
-    "swarm": ["spell_small", "splash", "spell_big", "support"],
-    "light": ["splash", "support", "cycle", "tank_killer", "building"],
+    "swarm": ["roll", "spell_small", "splash", "spell_big", "support"],
+    "light": ["splash", "support", "cycle", "tank_killer", "roll", "building"],
     "air": ["support", "spell_big", "building", "spell_small"],
     "building": ["spell_big", "tank", "tank_killer"],
 }

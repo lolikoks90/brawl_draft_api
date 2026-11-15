@@ -31,7 +31,8 @@ ROLE_LABELS = {
     "cycle": "Barata / ciclo (Esqueletos, Espíritu de hielo...)",
     "building": "Edificio (Cañón, Tesla, Torre bombardera...)",
     "siege": "Asedio (Mortero, Ballesta)",
-    "spell_small": "Hechizo pequeño (Descarga, Tronco, Flechas...)",
+    "roll": "Hechizo rodante (Tronco, Barril de bárbaro)",
+    "spell_small": "Hechizo pequeño (Descarga, Flechas, Bola de nieve...)",
     "spell_big": "Hechizo grande (Bola de fuego, Veneno, Cohete...)",
 }
 LABEL_TO_ROLE = {v: k for k, v in ROLE_LABELS.items()}

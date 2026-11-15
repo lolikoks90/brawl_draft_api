@@ -298,11 +298,15 @@ class Perception:
         self._static_mask: Optional[np.ndarray] = None
         self._bg: Optional[np.ndarray] = None       # fondo de la arena (float32)
         self._bg_samples: list[np.ndarray] = []
+        self._last_units = ([], [], [])
+        self._unstable_since: Optional[float] = None
 
     def reset_background(self) -> None:
         """Llamar al empezar cada partida: el fondo se aprende con la arena vacía."""
         self._bg = None
         self._bg_samples = []
+        self._last_units = ([], [], [])
+        self._unstable_since = None
 
     def _foreground(self, arena: np.ndarray) -> Optional[np.ndarray]:
         """Máscara de lo que NO es escenario (tropas, proyectiles). None mientras aprende el fondo.
@@ -320,10 +324,24 @@ class Perception:
             self._bg_samples = []
         diff = cv2.absdiff(arena, cv2.convertScaleAbs(self._bg)).max(axis=2) > 32
         fg = cv2.dilate(diff.astype(np.uint8) * 255, np.ones((5, 5), np.uint8))
-        # El fondo se adapta rápido donde no hay nada y muy despacio bajo las tropas.
-        alpha = np.where(fg > 0, 0.003, 0.05).astype(np.float32)[..., None]
+        if (fg > 0).mean() > 0.25:
+            # Cambia media arena a la vez (temblor al caer una torre, destello, cartel de
+            # coronas): no son tropas. Si dura, la arena ha cambiado: se reaprende el fondo.
+            now = time.time()
+            self._unstable_since = self._unstable_since or now
+            if now - self._unstable_since > 3.0:
+                last = self._last_units
+                self.reset_background()
+                self._last_units = last
+            return None
+        self._unstable_since = None
+        # El fondo sólo se actualiza donde NO hay nada encima: si absorbiera una tropa parada,
+        # al irse dejaría un "fantasma" con el color del camino que tapaba.
+        alpha = np.where(fg > 0, 0.0, 0.05).astype(np.float32)[..., None]
         self._bg = self._bg * (1 - alpha) + arena.astype(np.float32) * alpha
-        return fg
+        # Se devuelve la diferencia exacta (sin ensanchar): el borde ensanchado pisaría el
+        # camino de color que hay junto a la tropa y lo contaría como otra unidad.
+        return diff.astype(np.uint8) * 255
 
     # ---- Elixir ---------------------------------------------------------------
     def read_elixir(self, frame: np.ndarray) -> tuple[float, bool]:
@@ -372,8 +390,9 @@ class Perception:
         """Máscara (255 = analizar) que excluye torres y río (colores fijos del escenario)."""
         if self._static_mask is None or self._static_mask.shape != (ah, aw):
             m = np.full((ah, aw), 255, np.uint8)
-            for rect in self.cfg["towers"].values():
-                x1, y1, x2, y2 = tile_rect_px(rect, aw, ah, self.cols, self.rows, pad=1)
+            for c1, r1, c2, r2 in self.cfg["towers"].values():
+                # Margen extra arriba y abajo: ahí aparecen las barras de vida de las torres.
+                x1, y1, x2, y2 = tile_rect_px((c1 - 1, r1 - 3, c2 + 1, r2 + 2), aw, ah, self.cols, self.rows)
                 m[y1:y2, x1:x2] = 0
             r1, r2 = self.cfg["river_rows"]
             m[int(r1 / self.rows * ah):int((r2 + 1) / self.rows * ah), :] = 0
@@ -411,11 +430,15 @@ class Perception:
         return enemies, allies, spells
 
     def _blobs(self, mask: np.ndarray, aw: int, ah: int) -> list[Unit]:
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
-        n, _, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        # Una tropa enseña varias marcas de su color (insignia de nivel, barra de vida):
+        # se unen las que están a menos de ~1 baldosa para contar una sola unidad.
+        k_px = max(3, int(1.2 * aw / self.cols)) | 1
+        merged = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((k_px, k_px), np.uint8))
+        n, labels, stats, centroids = cv2.connectedComponentsWithStats(merged, connectivity=8)
+        real = np.bincount(labels[mask > 0], minlength=n)     # píxeles de color reales por unidad
         out = []
         for k in range(1, n):
-            area = int(stats[k, cv2.CC_STAT_AREA])
+            area = int(real[k])
             if area < self.cfg["threat_min_area"]:
                 continue
             tile = self._to_tile(*centroids[k], aw, ah)
@@ -427,12 +450,13 @@ class Perception:
         ah, aw = arena.shape[:2]
         fg = self._foreground(arena)
         if fg is None:
-            return [], [], []
+            return self._last_units
         hsv = cv2.cvtColor(arena, cv2.COLOR_BGR2HSV)
         static = self._mask_static(ah, aw) & fg
         enemies = self._blobs(mask_ranges(hsv, self.red) & static, aw, ah)
         allies = self._blobs(mask_ranges(hsv, self.blue) & static, aw, ah)
-        return enemies, allies, []
+        self._last_units = (enemies, allies, [])
+        return self._last_units
 
     # ---- Estado completo ------------------------------------------------------
     def analyse(self, frame: np.ndarray) -> GameState:

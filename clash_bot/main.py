@@ -169,7 +169,7 @@ class Bot:
 
         self.ctx = BattleContext(
             now=now, elapsed=self.match.elapsed(now), multiplier=self.match.multiplier(now),
-            opp_elixir=self.opponent.elixir, opp_recent=self.opponent.recent(6.0, now),
+            opp_elixir=self.opponent.elixir if self.detector.ok else None, opp_recent=self.opponent.recent(6.0, now),
             opp_likely_hand=self.opponent.likely_in_hand(),
             enemy_towers_down=self.match.enemy_down(), own_towers_down=self.match.own_down())
 
@@ -185,8 +185,9 @@ class Bot:
         self.recorder.record(state, self.ctx, action)
         if action is None:
             return
-        log.info("[%.1f elixir | rival ~%.1f | x%.0f] %s -> slot %d, baldosa %s (%s)",
-                 state.elixir, self.ctx.opp_elixir, self.ctx.multiplier, action.reason,
+        log.info("[%.1f elixir | rival %s | x%.0f] %s -> slot %d, baldosa %s (%s)",
+                 state.elixir, "?" if self.ctx.opp_elixir is None else f"~{self.ctx.opp_elixir:.1f}",
+                 self.ctx.multiplier, action.reason,
                  action.slot + 1, action.tile, self.learner.arm_key(action))
         self._save_debug(frame, state, action)
         self.controls.play(action)
@@ -249,7 +250,7 @@ class Bot:
                 self._win_placed = True
             extra = f"[{screen.value}]"
             if self.in_match:
-                extra += f" t={self.ctx.elapsed:.0f}s x{self.ctx.multiplier:.0f} rival~{self.ctx.opp_elixir:.1f}"
+                extra += f" t={self.ctx.elapsed:.0f}s x{self.ctx.multiplier:.0f} rival~{self.ctx.opp_elixir if self.ctx.opp_elixir is not None else '?'}"
             cv2.imshow("crbot debug", draw_overlay(frame, self.cfg, state, extra))
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 raise KeyboardInterrupt

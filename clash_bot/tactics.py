@@ -162,6 +162,10 @@ class TacticalEngine:
             if (c.role or "").startswith("spell"):
                 out.append(self._mk(c, (cx, cy), ctx, "defend", "on_top", base,
                                     f"hechizo sobre {what}"))
+            elif c.role == "roll":
+                # El Tronco se lanza en nuestro lado, unas baldosas por delante del grupo, y rueda.
+                out.append(self._mk(c, (cx, lead.tile[1] + 3), ctx, "defend", "roll", base,
+                                    f"{c.name} rodando hacia {what}"))
             elif c.role == "building":
                 out.append(self._mk(c, (center, 22), ctx, "defend", "center_pull", base,
                                     f"edificio central contra {what}"))
@@ -191,6 +195,11 @@ class TacticalEngine:
         if best_score < self.t["spell_cluster_min"]:
             return []
         out = []
+        min_row = self.cfg["river_rows"][1] + 2
+        if best_pos[1] >= min_row - 8 and not any(v.kind == "air" for v in best):
+            for _, c in self.cards_for(s, ["roll"], limit=1):   # alcance del Tronco: ~10 baldosas
+                out.append(self._mk(c, (best_pos[0], best_pos[1] + 3), ctx, "spell_value", "roll",
+                                    0.6 + 0.05 * min(best_score, 6), f"{c.name} rodando hacia grupo de {len(best)}"))
         for _, c in self.cards_for(s, ["spell_big", "spell_small"], limit=2):
             if c.role == "spell_small" and not any(v.kind in ("swarm", "air", None) for v in best):
                 continue

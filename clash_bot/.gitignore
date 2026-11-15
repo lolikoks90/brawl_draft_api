@@ -4,3 +4,4 @@ cr_yolo.pt
 dataset/
 runs/
 *.pt
+__pycache__/

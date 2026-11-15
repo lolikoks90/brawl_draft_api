@@ -12,6 +12,8 @@ Arquitectura
     CardMemory      : base de datos auto-aprendida (cards_db.json). Cada hash nuevo se registra
                       solo; al jugarlo se mide la caída de elixir para inferir su coste y se le
                       asigna el nombre/rol del mazo configurado en DECK con ese coste.
+    YoloDetector    : (opcional) detecta tropas concretas (P.E.K.K.A, Montapuercos...) con un
+                      modelo YOLO de ultralytics; el bando se deduce del color del indicador.
     TacticalEngine  : reglas priorizadas y configurables (defensa, castigo de exceso de elixir,
                       push con tanque, exploración de cartas desconocidas).
     HumanInput      : convierte (slot, baldosa) en clics de `pyautogui` con jitter y retrasos.
@@ -24,6 +26,13 @@ Uso
     python main.py               # juega
     python main.py --debug       # juega y muestra ventana con las ROIs y el estado
     python main.py --calibrate   # guarda calibration.png con las ROIs dibujadas y sale
+
+Detección de tropas con YOLO (opcional; sin modelo se usa la detección por color)
+    python main.py --collect [--no-play]   # 1) guarda frames de la arena en dataset/images
+    #                                        2) etiqueta las tropas (CVAT / Label Studio / Roboflow)
+    #                                           y exporta en formato YOLO con su data.yaml
+    python main.py --train dataset/data.yaml   # 3) entrena y deja cr_yolo.pt junto a main.py
+    python main.py                             # 4) el bot usa YOLO automáticamente
 
 Parada de emergencia: mover el ratón a una esquina de la pantalla (FAILSAFE de pyautogui)
 o Ctrl+C en la consola.
@@ -93,6 +102,25 @@ CONFIG = {
     "threat_heavy_area": 140,     # px de rojo a partir del cual se considera tanque (P.E.K.K.A...)
     "threat_swarm_count": 4,      # nº de blobs en un mismo carril => enjambre
 
+    # --- Detección de tropas con YOLO (ultralytics) -------------------------------
+    # Si el modelo no existe o ultralytics no está instalado, se usa automáticamente la
+    # detección por manchas rojas de arriba.
+    "yolo": {
+        "enabled": True,
+        "model": "cr_yolo.pt",        # ruta relativa a main.py (sale de --train)
+        "base_weights": "yolo11n.pt", # pesos preentrenados para --train (se descargan solos)
+        "conf": 0.40,
+        "iou": 0.50,
+        "imgsz": 640,
+        "device": None,               # None = auto (GPU si hay), "cpu", "0"...
+        "every_n_frames": 2,          # inferencia 1 de cada N frames (reutiliza el resultado)
+        # Colores del indicador de nivel / barra de vida que llevan las tropas encima.
+        "team_hsv_blue": ((95, 140, 140), (125, 255, 255)),
+    },
+    # Recolección automática de frames para crear el dataset (--collect).
+    "dataset_dir": "dataset",
+    "collect_interval_s": 1.5,
+
     # --- Ritmo / humanización -----------------------------------------------------
     "min_seconds_between_plays": 1.2,
     "click_jitter_px": 4,
@@ -119,7 +147,43 @@ COUNTERS = {
     "heavy": ["tank_killer", "building", "cycle", "support"],
     "swarm": ["spell_small", "splash", "spell_big", "support"],
     "light": ["splash", "support", "cycle", "tank_killer", "building"],
+    "air": ["support", "spell_big", "building", "spell_small"],
+    "building": ["spell_big", "tank", "tank_killer"],
 }
+
+# Perfil de cada clase que puede devolver el modelo YOLO -> tipo de amenaza.
+# Los nombres se normalizan (minúsculas, espacios/guiones -> "_", sin prefijo enemy_/ally_).
+# Las clases que no estén aquí se tratan como "light". "ignore" = no es una amenaza.
+TROOP_PROFILES = {
+    "pekka": "heavy", "mega_knight": "heavy", "giant": "heavy", "golem": "heavy",
+    "royal_giant": "heavy", "hog_rider": "heavy", "ram_rider": "heavy", "elixir_golem": "heavy",
+    "electro_giant": "heavy", "goblin_giant": "heavy", "giant_skeleton": "heavy",
+    "balloon": "air", "lava_hound": "air", "baby_dragon": "air", "minions": "air",
+    "minion_horde": "air", "bats": "air", "inferno_dragon": "air", "mega_minion": "air",
+    "skeleton_army": "swarm", "goblin_gang": "swarm", "barbarians": "swarm", "skeletons": "swarm",
+    "goblins": "swarm", "spear_goblins": "swarm", "guards": "swarm", "royal_recruits": "swarm",
+    "x_bow": "building", "mortar": "building", "goblin_hut": "building", "furnace": "building",
+    "tombstone": "building", "barbarian_hut": "building",
+    "king_tower": "ignore", "princess_tower": "ignore", "arrows": "ignore", "fireball": "ignore",
+    "zap": "ignore", "log": "ignore", "clock": "ignore",
+}
+
+# Counters específicos por tropa (tienen prioridad sobre COUNTERS genéricos).
+SPECIFIC_COUNTERS = {
+    "pekka": ["tank_killer", "building", "cycle"],
+    "mega_knight": ["tank_killer", "building", "support"],
+    "hog_rider": ["building", "tank_killer", "cycle"],
+    "balloon": ["support", "building"],
+    "skeleton_army": ["spell_small", "splash"],
+    "goblin_gang": ["spell_small", "splash"],
+    "minion_horde": ["spell_big", "support"],
+    "x_bow": ["spell_big", "tank"],
+}
+
+KIND_PRIORITY = ["heavy", "building", "air", "swarm", "light"]
+
+TEAM_PREFIXES = {"enemy_": "enemy", "red_": "enemy", "opp_": "enemy",
+                 "ally_": "ally", "own_": "ally", "blue_": "ally"}
 
 log = logging.getLogger("crbot")
 
@@ -198,6 +262,10 @@ class Threat:
     tile: tuple[int, int]      # (columna, fila) de la arena
     area: int
     lane: str                  # "left" | "right"
+    label: Optional[str] = None        # clase YOLO normalizada (p.ej. "pekka"); None = blob rojo
+    kind: Optional[str] = None         # heavy | air | swarm | light | building
+    conf: float = 1.0
+    bbox: Optional[tuple[int, int, int, int]] = None   # px dentro del recorte de la arena
 
 
 @dataclass
@@ -220,9 +288,86 @@ class GameState:
     threats_enemy_half: list[Threat] = field(default_factory=list)
 
 
-class Perception:
-    def __init__(self, cfg: dict):
+def normalize_label(name: str) -> tuple[str, Optional[str]]:
+    """'Enemy PEKKA' -> ('pekka', 'enemy'); 'mini-pekka' -> ('mini_pekka', None)."""
+    n = name.strip().lower().replace(" ", "_").replace("-", "_").replace(".", "")
+    for prefix, team in TEAM_PREFIXES.items():
+        if n.startswith(prefix):
+            return n[len(prefix):], team
+    return n, None
+
+
+class YoloDetector:
+    """Detector de tropas con un modelo YOLO entrenado sobre la arena de Clash Royale.
+
+    El bando de cada detección sale del prefijo de la clase (enemy_/ally_) si el modelo
+    lo distingue, o si no del color del indicador que la tropa lleva encima
+    (rojo = enemigo, azul = aliado).
+    """
+
+    def __init__(self, cfg: dict, base_dir: Path):
         self.cfg = cfg
+        self.ycfg = cfg["yolo"]
+        self.ok = False
+        self.model = None
+        if not self.ycfg["enabled"]:
+            return
+        path = base_dir / self.ycfg["model"]
+        if not path.exists():
+            log.warning("Modelo YOLO '%s' no encontrado: uso detección por color. "
+                        "Crea uno con --collect y --train.", path)
+            return
+        try:
+            from ultralytics import YOLO
+        except ImportError:
+            log.warning("ultralytics no instalado: uso detección por color.")
+            return
+        self.model = YOLO(str(path))
+        self.names = {int(k): v for k, v in self.model.names.items()}
+        self.red_ranges = [(np.array(lo, np.uint8), np.array(hi, np.uint8))
+                           for lo, hi in cfg["enemy_hsv_ranges"]]
+        lo, hi = self.ycfg["team_hsv_blue"]
+        self.blue = (np.array(lo, np.uint8), np.array(hi, np.uint8))
+        self.ok = True
+        log.info("YOLO cargado (%d clases) desde %s", len(self.names), path)
+
+    def _team_by_color(self, hsv: np.ndarray, box: tuple[int, int, int, int]) -> str:
+        x1, y1, x2, y2 = box
+        h = max(1, y2 - y1)
+        # El indicador de nivel / barra de vida está en la parte alta de la caja o justo encima.
+        top = max(0, y1 - h // 3)
+        roi = hsv[top:y1 + h // 3, max(0, x1):max(x1 + 1, x2)]
+        if roi.size == 0:
+            return "enemy"
+        red = sum(int(cv2.inRange(roi, lo, hi).sum()) for lo, hi in self.red_ranges)
+        blue = int(cv2.inRange(roi, *self.blue).sum())
+        return "enemy" if red >= blue else "ally"
+
+    def detect(self, arena: np.ndarray) -> list[tuple[str, str, float, tuple[int, int, int, int]]]:
+        """Devuelve [(label, team, conf, (x1, y1, x2, y2)), ...] en px del recorte."""
+        res = self.model.predict(arena, conf=self.ycfg["conf"], iou=self.ycfg["iou"],
+                                 imgsz=self.ycfg["imgsz"], device=self.ycfg["device"],
+                                 verbose=False)[0]
+        hsv = None
+        out = []
+        for xyxy, cls, conf in zip(res.boxes.xyxy.tolist(), res.boxes.cls.tolist(),
+                                   res.boxes.conf.tolist()):
+            label, team = normalize_label(self.names[int(cls)])
+            box = tuple(int(v) for v in xyxy)
+            if team is None:
+                if hsv is None:
+                    hsv = cv2.cvtColor(arena, cv2.COLOR_BGR2HSV)
+                team = self._team_by_color(hsv, box)
+            out.append((label, team, float(conf), box))
+        return out
+
+
+class Perception:
+    def __init__(self, cfg: dict, detector: Optional[YoloDetector] = None):
+        self.cfg = cfg
+        self.detector = detector if detector and detector.ok else None
+        self._frame_idx = 0
+        self._cached_threats: tuple[list[Threat], list[Threat]] = ([], [])
         self.e_low = np.array(cfg["elixir_hsv_low"], np.uint8)
         self.e_high = np.array(cfg["elixir_hsv_high"], np.uint8)
         self.cols, self.rows = cfg["arena_tiles"]
@@ -280,6 +425,33 @@ class Perception:
 
     # ---- Amenazas -------------------------------------------------------------
     def read_threats(self, frame: np.ndarray) -> tuple[list[Threat], list[Threat]]:
+        if self.detector is None:
+            return self.read_threats_color(frame)
+        self._frame_idx += 1
+        if self._frame_idx % self.cfg["yolo"]["every_n_frames"] == 0 or self._frame_idx == 1:
+            self._cached_threats = self.read_threats_yolo(frame)
+        return self._cached_threats
+
+    def read_threats_yolo(self, frame: np.ndarray) -> tuple[list[Threat], list[Threat]]:
+        arena = crop(frame, self.cfg["arena_roi"])
+        ah, aw = arena.shape[:2]
+        own, enemy = [], []
+        river_top = self.cfg["river_rows"][0]
+        for label, team, conf, (x1, y1, x2, y2) in self.detector.detect(arena):
+            kind = TROOP_PROFILES.get(label, "light")
+            if team != "enemy" or kind == "ignore":
+                continue
+            # Posición = pies de la tropa (base de la caja), que es lo que importa en la arena.
+            cx, cy = (x1 + x2) / 2, y2 - (y2 - y1) * 0.15
+            col = int(np.clip(cx / aw * self.cols, 0, self.cols - 1))
+            row = int(np.clip(cy / ah * self.rows, 0, self.rows - 1))
+            t = Threat(tile=(col, row), area=(x2 - x1) * (y2 - y1),
+                       lane="left" if col < self.cols / 2 else "right",
+                       label=label, kind=kind, conf=conf, bbox=(x1, y1, x2, y2))
+            (own if row >= river_top else enemy).append(t)
+        return own, enemy
+
+    def read_threats_color(self, frame: np.ndarray) -> tuple[list[Threat], list[Threat]]:
         arena = crop(frame, self.cfg["arena_roi"])
         ah, aw = arena.shape[:2]
         hsv = cv2.cvtColor(arena, cv2.COLOR_BGR2HSV)
@@ -430,12 +602,23 @@ class TacticalEngine:
         return (3 if lane == "left" else self.cols - 4) if not back else (2 if lane == "left" else self.cols - 3)
 
     @staticmethod
-    def _classify(threats: list[Threat], heavy_area: int, swarm_n: int) -> str:
+    def _classify(threats: list[Threat], heavy_area: int, swarm_n: int) -> tuple[str, Optional[str]]:
+        """Devuelve (tipo de amenaza, tropa concreta más peligrosa si YOLO la identificó)."""
+        labelled = [t for t in threats if t.kind]
+        if labelled:
+            for kind in KIND_PRIORITY:
+                group = [t for t in labelled if t.kind == kind]
+                if group:
+                    if kind == "light" and len(labelled) >= swarm_n:
+                        return "swarm", None
+                    top = max(group, key=lambda t: t.conf)
+                    return kind, top.label
+        # Sin etiquetas (detección por color): heurística por tamaño / número de manchas.
         if any(t.area >= heavy_area for t in threats):
-            return "heavy"
+            return "heavy", None
         if len(threats) >= swarm_n:
-            return "swarm"
-        return "light"
+            return "swarm", None
+        return "light", None
 
     # ---- reglas ---------------------------------------------------------------
     def rule_defend(self, s: GameState) -> Optional[Action]:
@@ -446,11 +629,13 @@ class TacticalEngine:
         for t in s.threats_own_half:
             lanes.setdefault(t.lane, []).append(t)
         lane, threats = max(lanes.items(), key=lambda kv: sum(t.area for t in kv[1]))
-        kind = self._classify(threats, self.cfg["threat_heavy_area"], self.cfg["threat_swarm_count"])
-        card = self._by_role(s, COUNTERS[kind])
+        kind, label = self._classify(threats, self.cfg["threat_heavy_area"], self.cfg["threat_swarm_count"])
+        card = self._by_role(s, SPECIFIC_COUNTERS.get(label, COUNTERS[kind])) if label else None
+        card = card or self._by_role(s, COUNTERS[kind])
         if card is None:
             return None
-        lead = max(threats, key=lambda t: t.tile[1])          # el más adelantado (más cerca de nuestra torre)
+        targets = [t for t in threats if t.label == label] if label else threats
+        lead = max(targets, key=lambda t: t.tile[1])          # el más adelantado (más cerca de nuestra torre)
         cx = int(np.mean([t.tile[0] for t in threats]))
         cy = int(np.mean([t.tile[1] for t in threats]))
         if card.role and card.role.startswith("spell"):
@@ -459,7 +644,7 @@ class TacticalEngine:
             tile = self._clamp_own(self.cols // 2 + (-1 if lane == "left" else 1), 23)  # centro, tira la tropa
         else:
             tile = self._clamp_own(lead.tile[0], lead.tile[1] + 3)  # justo delante de la amenaza
-        return Action(card.slot, tile, f"defensa {kind} en carril {lane} con {card.name}", card.hash)
+        return Action(card.slot, tile, f"defensa {label or kind} en carril {lane} con {card.name}", card.hash)
 
     def rule_counter_push(self, s: GameState) -> Optional[Action]:
         """Tras defender, si el enemigo tiene poca presencia y hay elixir, apoyar el carril."""
@@ -588,10 +773,78 @@ def draw_overlay(frame: np.ndarray, cfg: dict, state: Optional[GameState]) -> np
             cv2.putText(out, label, (int(x1 * w), int(y1 * h) - 4),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 255), 1)
         for t in state.threats_own_half + state.threats_enemy_half:
-            fx = ax1 + (t.tile[0] + 0.5) / cols * (ax2 - ax1)
-            fy = ay1 + (t.tile[1] + 0.5) / rows * (ay2 - ay1)
-            cv2.circle(out, (int(fx * w), int(fy * h)), 6, (0, 0, 255), 2)
+            if t.bbox:   # detección YOLO: caja + etiqueta
+                bx1, by1, bx2, by2 = t.bbox
+                ox, oy = int(ax1 * w), int(ay1 * h)
+                cv2.rectangle(out, (ox + bx1, oy + by1), (ox + bx2, oy + by2), (0, 0, 255), 1)
+                cv2.putText(out, f"{t.label} {t.conf:.2f}", (ox + bx1, oy + by1 - 3),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1)
+            else:        # detección por color: círculo en la baldosa
+                fx = ax1 + (t.tile[0] + 0.5) / cols * (ax2 - ax1)
+                fy = ay1 + (t.tile[1] + 0.5) / rows * (ay2 - ay1)
+                cv2.circle(out, (int(fx * w), int(fy * h)), 6, (0, 0, 255), 2)
     return out
+
+
+# =============================================================================
+# DATASET Y ENTRENAMIENTO YOLO
+# =============================================================================
+
+class DatasetCollector:
+    """Guarda recortes de la arena durante las partidas para entrenar YOLO.
+
+    Junto a cada imagen escribe una pre-etiqueta en formato YOLO (clase 0 = "enemy_unit")
+    generada con la detección por color, para que en la herramienta de etiquetado
+    (CVAT, Label Studio, Roboflow...) sólo haya que corregir cajas y poner el nombre de la tropa.
+    """
+
+    def __init__(self, cfg: dict, base_dir: Path):
+        self.cfg = cfg
+        self.img_dir = base_dir / cfg["dataset_dir"] / "images"
+        self.lbl_dir = base_dir / cfg["dataset_dir"] / "prelabels"
+        self.img_dir.mkdir(parents=True, exist_ok=True)
+        self.lbl_dir.mkdir(parents=True, exist_ok=True)
+        self.color = Perception(cfg)       # sin detector => manchas rojas
+        self.last = 0.0
+        self.count = 0
+
+    def maybe_save(self, frame: np.ndarray, state: GameState) -> None:
+        if not state.in_battle or time.time() - self.last < self.cfg["collect_interval_s"]:
+            return
+        self.last = time.time()
+        arena = crop(frame, self.cfg["arena_roi"])
+        name = f"cr_{int(self.last * 1000)}"
+        cv2.imwrite(str(self.img_dir / f"{name}.jpg"), arena, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        own, enemy = self.color.read_threats_color(frame)
+        cols, rows = self.cfg["arena_tiles"]
+        lines = []
+        for t in own + enemy:
+            # Caja aproximada de ~1.5 x 2 baldosas alrededor de la mancha (la tropa queda debajo).
+            cx, cy = (t.tile[0] + 0.5) / cols, (t.tile[1] + 1.0) / rows
+            lines.append(f"0 {cx:.5f} {cy:.5f} {1.5 / cols:.5f} {2.0 / rows:.5f}")
+        (self.lbl_dir / f"{name}.txt").write_text("\n".join(lines))
+        self.count += 1
+        if self.count % 50 == 0:
+            log.info("Dataset: %d imágenes guardadas en %s", self.count, self.img_dir)
+
+
+def train_yolo(cfg: dict, data_yaml: str, epochs: int) -> None:
+    """Entrena (fine-tuning) YOLO sobre el dataset etiquetado y deja el modelo en cfg['yolo']['model']."""
+    import shutil
+    from ultralytics import YOLO
+
+    y = cfg["yolo"]
+    base_dir = Path(__file__).parent
+    model = YOLO(y["base_weights"])
+    results = model.train(data=data_yaml, epochs=epochs, imgsz=y["imgsz"], device=y["device"],
+                          project=str(base_dir / "runs"), name="cr_yolo", exist_ok=True,
+                          # El juego no se ve nunca volteado en vertical ni con tonos cambiados:
+                          # el color rojo/azul es información (bando), así que se limita hsv_h.
+                          flipud=0.0, fliplr=0.5, hsv_h=0.0, mosaic=1.0)
+    best = Path(results.save_dir) / "weights" / "best.pt"
+    dst = base_dir / y["model"]
+    shutil.copy(best, dst)
+    log.info("Modelo entrenado copiado a %s", dst)
 
 
 # =============================================================================
@@ -599,12 +852,15 @@ def draw_overlay(frame: np.ndarray, cfg: dict, state: Optional[GameState]) -> np
 # =============================================================================
 
 class Bot:
-    def __init__(self, cfg: dict, debug: bool):
+    def __init__(self, cfg: dict, debug: bool, collect: bool = False, play: bool = True):
+        base_dir = Path(__file__).parent
         self.cfg = cfg
         self.debug = debug
+        self.play = play
         self.capture = ScreenCapture(cfg)
-        self.perception = Perception(cfg)
-        self.memory = CardMemory(Path(__file__).with_name(cfg["cards_db"]), DECK, cfg["hash_match_distance"])
+        self.perception = Perception(cfg, YoloDetector(cfg, base_dir))
+        self.collector = DatasetCollector(cfg, base_dir) if collect else None
+        self.memory = CardMemory(base_dir / cfg["cards_db"], DECK, cfg["hash_match_distance"])
         self.engine = TacticalEngine(cfg)
         self.input = HumanInput(cfg, self.capture)
         self.last_play = 0.0
@@ -631,8 +887,10 @@ class Bot:
             for card in state.hand:
                 self.memory.enrich(card)
             self._check_cost_measurement(state)
+            if self.collector:
+                self.collector.maybe_save(frame, state)
 
-            if time.time() - self.last_play >= self.cfg["min_seconds_between_plays"] and not self.pending_cost:
+            if self.play and time.time() - self.last_play >= self.cfg["min_seconds_between_plays"] and not self.pending_cost:
                 action = self.engine.decide(state)
                 if action:
                     log.info("[%.1f elixir] %s -> slot %d, baldosa %s",
@@ -664,7 +922,7 @@ class Bot:
 def calibrate(cfg: dict) -> None:
     cap = ScreenCapture(cfg)
     frame = cap.grab()
-    state = Perception(cfg).analyse(frame)
+    state = Perception(cfg, YoloDetector(cfg, Path(__file__).parent)).analyse(frame)
     out = Path(__file__).with_name("calibration.png")
     cv2.imwrite(str(out), draw_overlay(frame, cfg, state))
     print(f"Guardado {out}. Elixir leído: {state.elixir}. Ajusta las ROIs en CONFIG si no encajan.")
@@ -674,15 +932,25 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Bot autónomo de Clash Royale para emulador.")
     parser.add_argument("--debug", action="store_true", help="muestra ventana con ROIs y estado")
     parser.add_argument("--calibrate", action="store_true", help="guarda calibration.png y sale")
+    parser.add_argument("--collect", action="store_true",
+                        help="guarda frames de la arena en dataset/ para entrenar YOLO")
+    parser.add_argument("--no-play", action="store_true",
+                        help="sólo observa (útil con --collect mientras juegas tú)")
+    parser.add_argument("--train", metavar="DATA_YAML",
+                        help="entrena YOLO con un dataset etiquetado (formato ultralytics) y sale")
+    parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
+    if args.train:
+        train_yolo(CONFIG, args.train, args.epochs)
+        return
     if args.calibrate:
         calibrate(CONFIG)
         return
-    bot = Bot(CONFIG, debug=args.debug)
+    bot = Bot(CONFIG, debug=args.debug, collect=args.collect, play=not args.no_play)
     time.sleep(2)  # tiempo para poner el emulador en primer plano
     try:
         bot.run()
